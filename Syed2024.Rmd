@@ -1,0 +1,1387 @@
+---
+title: Analysis of chi angle distributions in free amino acids via multiplet fitting of proton scalar couplings
+journal: "`r rticles::copernicus_journal_abbreviations(journal_name = 'Magnetic Resonance')`"
+author:
+  - given_name: Nabiha R.
+    surname: Syed
+    affiliation: 1
+  - given_name: Nafisa B.
+    surname: Masud
+    affiliation: 1
+  - given_name: Colin A.
+    surname: Smith
+    affiliation: 1
+    email: colin.smith@wesleyan.edu
+    corresponding: true
+affiliation:
+  - code: 1
+    address: Department of Chemistry, Wesleyan University, Middletown, CT, United States
+abstract: |
+  Scalar couplings are a fundamental aspect of nuclear magnetic resonance (NMR) experiments and provide rich information about electron-mediated interactions between nuclei. $\phantom{}^3J$ couplings are particularly useful for determining molecular structure through the Karplus relationship, a mathematical formula used for calculating $\phantom{}^3J$ coupling constants from dihedral angles. In small molecules, scalar couplings are often determined through analysis of one-dimensional proton spectra. Larger proteins have typically required specialized multidimensional pulse programs designed to overcome spectral crowding and multiplet complexity. Here we present a generalized framework for fitting scalar couplings with arbitrarily complex multiplet patterns using a weak coupling model. The method is implemented in FitNMR and applicable to 1D, 2D, and 3D NMR spectra. To gain insight into the proton-proton coupling patterns present in protein side chains, we analyze a set of free amino acid 1D spectra. We show that the weak-coupling assumption is largely sufficient for fitting the majority of resonances, although there are notable exceptions. To enable structural interpretation of all couplings, we extend generalized and self-consistent Karplus equation parameterizations to all chi angles. An enhanced model of side chain motion incorporating rotamer statistics from the Protein Data Bank (PDB) is developed. Even without stereospecific assignments of the beta hydrogens, we find that two couplings are sufficient to exclude a single-rotamer model for all amino acids except proline. While most free amino acids show rotameric populations consistent with crystal structure statistics, beta-branched valine and isoleucine deviate substantially.
+bibliography: Syed2024.bib
+running:
+  title: Multiplet fitting of proton scalar couplings
+  author: Syed et al.
+# This section is mandatory even if you declare that no competing interests are present.
+competinginterests: |
+  The authors declare no competing interests.
+# See https://publications.copernicus.org/for_authors/licence_and_copyright.html, normally used for transferring the copyright, if needed. 
+# Note: additional copyright statements for affiliated software or data need to be placed in the data availability section. 
+# copyrightstatement: |
+#  The authors retain the copyright for this publication. It is distributed under the Creative Commons Attribution 4.0 License
+### The following commands are for the statements about the availability of data sets and/or software code corresponding to the manuscript.
+### It is strongly recommended to make use of these sections in case data sets and/or software code have been part of your research the article is based on.
+### Note: unless stated otherwise, software and data affiliated with the manuscript are assumed to be published under the same licence as the article (currently Creative Commons 4.0)
+availability:
+  codedata: |
+    This manuscript was prepared using R Markdown. All code and data required for reproducing the manuscript, figures, and tables in their entirety are available in the supplement ZIP archive distributed with the paper. See the README.md file within for more details. The supplement is also available at [https://github.com/smith-group/syed2024](https://github.com/smith-group/syed2024), which may be updated as necessary to maintain software compatibility. The fitting methodology is implemented in the FitNMR open-source R package [https://github.com/smith-group/fitnmr](https://github.com/smith-group/fitnmr).
+authorcontribution: |
+  NRS and NBM did fits of the 1D NMR spectra. CAS did the other analyses and wrote the manuscript.
+disclaimer: |
+  Publisher’s note: Copernicus Publications remains neutral with regard to jurisdictional claims in published maps and institutional affiliations.
+acknowledgements: |
+  This work was supported by NIH grant 1R15GM141974-01.
+appendix: |
+  \clearpage
+  \section{Supplementary information}
+  \subsection{Processing amino acid 1D NMR data}
+  Amino acid 1D NMR free induction decay (FID) data were converted and processed using NMRPipe. FID conversion was performed using the `bruker` program, with chemical shift referencing done using the temperature dependence of the \chem{H_2O} chemical shift. Temperatures ranged 298-306 \unit{K} depending on the amino acid sample (see Table \ref{tab:aadata}). Spectra were processed with the following NMRPipe script, which includes a cosine window function and frequency domain polynomial baseline correction:
+  ```
+  #!/bin/csh
+  
+  nmrPipe -in test.fid \
+  | nmrPipe  -fn SP -off 0.5 -end 1.00 -pow 1 -c 0.5    \
+  | nmrPipe  -fn ZF -auto                               \
+  | nmrPipe  -fn FT -auto                               \
+  | nmrPipe  -fn PS -p0 $P0 -p1 $P1 -di -verb           \
+  | nmrPipe  -fn POLY -auto                             \
+     -ov -out test.ft1
+  ```
+  
+  The zero- and first-order phases were extracted from the original TopSpin processing parameters. Their signs were changed prior to insertion into the NMRPipe script above. The Bruker PHC0 and PHC1 parameters were extracted using the following commands:
+  ```
+  grep PHC0 pdata/1/proc | cut -d " " -f 2
+  grep PHC1 pdata/1/proc | cut -d " " -f 2
+  ```
+  
+  \appendixtables
+  
+  ```{r echo = FALSE}
+  fit_dirs <- list.files("fit1d", pattern = "^1H$", full.names = TRUE, recursive = TRUE, include.dirs = TRUE)
+  names(fit_dirs) <- sub("fit1d/([^/]+)/.+", "\\1", fit_dirs)
+  acqus_files <- file.path(fit_dirs, "acqus")
+  te_lines <- sapply(acqus_files, function(filepath) grep("[$]TE=", readLines(filepath), value = TRUE))
+  temps <- as.numeric(sapply(strsplit(te_lines, " "), "[[", 2))
+  aas <- names(fit_dirs)
+  substr(aas, 1, 1) <- toupper(substr(aas, 1, 1))
+  fields <- sapply(strsplit(fit_dirs, "/"), "[[", 3)
+  bmrbs <- sapply(strsplit(fit_dirs, "[/_]"), "[[", 4)
+  aa_table <- cbind(
+    "Amino Acid" = aas,
+    "Field Strength (MHz)" = fields,
+    "Temperature (K)" = signif(temps, 5),
+    "BMRB ID" = bmrbs
+  )
+  ```
+  
+  ```{r echo = FALSE, results = 'asis'}
+  knitr::kable(aa_table, "latex", row.names = FALSE, caption = "Amino acid data used from the BMRB. Temperatures shown are from recorded Bruker acquisition parameters.", label = "aadata")
+  ```
+  
+  ```{r echo = FALSE}
+  vec_crossprod <- function(x, y) c(x[2]*y[3]-x[3]*y[2], x[3]*y[1]-x[1]*y[3], x[1]*y[2]-x[2]*y[1])
+  
+  dihedral_angle <- function(xyz) {
+  	
+  	b1 <- xyz[,2]-xyz[,1]
+  	b2 <- xyz[,3]-xyz[,2]
+  	b3 <- xyz[,4]-xyz[,3]
+  	
+  	b2_mag <- sqrt(sum(b2^2))
+  	b1_cross_b2 <- vec_crossprod(b1, b2)
+  	b2_cross_b3 <- vec_crossprod(b2, b3)
+  	atan2(sum(b2_mag*b1*b2_cross_b3), sum(b1_cross_b2*b2_cross_b3))
+  }
+  
+  bond_separation <- function(coord_mat, depth=4) {
+  
+  	bond_sep_mat <- matrix(NA_integer_, nrow=ncol(coord_mat), ncol=ncol(coord_mat), dimnames=list(colnames(coord_mat), colnames(coord_mat)))
+  	diag(bond_sep_mat) <- 0
+  
+  	heavy_idx <- substr(colnames(coord_mat), 1, 1) %in% c("C","N","O","S")
+  	
+  	atom_dist <- as.matrix(stats::dist(t(coord_mat)))
+  
+  	heavy_names <- colnames(coord_mat)[heavy_idx][apply(atom_dist[!heavy_idx,heavy_idx], 1, which.min)]
+  	proton_names <- colnames(coord_mat)[!heavy_idx]
+  
+  	bond_sep_mat[cbind(heavy_names,proton_names)] <- bond_sep_mat[cbind(proton_names,heavy_names)] <- 1
+  
+  	heavy_bond_mat <- which(atom_dist[heavy_idx,heavy_idx] > 0 & atom_dist[heavy_idx,heavy_idx] < 2, arr.ind=TRUE)
+  	heavy_bond_mat <- matrix(colnames(coord_mat)[heavy_idx][heavy_bond_mat], ncol=2)
+  
+  	bond_sep_mat[heavy_bond_mat] <- 1
+  
+  	for (i in seq_len(depth-1)) {
+  		for (j in seq_len(nrow(bond_sep_mat))) {
+  			bond_idx <- which(bond_sep_mat[j,] == i)
+  			onebond_idx <- unique(which(bond_sep_mat[,bond_idx,drop=FALSE] == 1, arr.ind=TRUE)[,1])
+  			nbond_idx <- onebond_idx[is.na(bond_sep_mat[j,onebond_idx])]
+  			bond_sep_mat[j,nbond_idx] <- i+1
+  		}
+  	}
+  
+  	bond_sep_mat
+  }
+  
+  res_order <- c(
+  	"gly", "ala", "val", "leu", 
+  	"ile", "met",
+  	"thr", "ser", "cys",
+  	"asn", "gln", 
+  	"asp", "glu", "his",
+  	"lys", "arg",
+  	"pro",
+  	"tyr", "phe",
+  	"trp"
+  )
+  
+  chi_res_names <- res_order[3:20]
+  
+  chi1_atom <- rep("CG", length(chi_res_names))
+  names(chi1_atom) <- chi_res_names
+  chi1_atom["cys"] <- "SG"
+  chi1_atom[c("ile", "val")] <- "CG1"
+  chi1_atom["ser"] <- "OG"
+  chi1_atom["thr"] <- "OG1"
+  
+  chi2_atom <- rep(NA_character_, length(chi_res_names))
+  names(chi2_atom) <- chi_res_names
+  chi2_atom[c("arg", "gln", "glu", "lys", "pro")] <- "CD"
+  chi2_atom[c("ile", "leu")] <- "CD1"
+  chi2_atom["met"] <- "SD"
+  
+  chi3_atom <- rep(NA_character_, length(chi_res_names))
+  names(chi3_atom) <- chi_res_names
+  chi3_atom["lys"] <- "CE"
+  chi3_atom["arg"] <- "NE"
+  chi3_atom["pro"] <- "N"
+  
+  chi4_atom <- rep(NA_character_, length(chi_res_names))
+  names(chi4_atom) <- chi_res_names
+  chi4_atom["lys"] <- "NZ"
+  
+  chi_atoms <- cbind(chi1_atom, chi2_atom, chi3_atom, chi4_atom)
+  colnames(chi_atoms) <- NULL
+  
+  aa_files <- list.files("aa_model", full.names = TRUE)
+  names(aa_files) <- tolower(substr(basename(aa_files), 1, 3))
+  
+  aa_coords <- lapply(aa_files, function(aa_file) {
+  
+  	aa_lines <- readLines(aa_file)
+  	aa_hetatm_lines <- grep("^HETATM", aa_lines, value = TRUE)
+  	aa_coord <- rbind(
+  		as.numeric(substr(aa_hetatm_lines, 31, 38)),
+  		as.numeric(substr(aa_hetatm_lines, 39, 46)),
+  		as.numeric(substr(aa_hetatm_lines, 47, 54))
+  	)
+  	colnames(aa_coord) <- trimws(substr(aa_hetatm_lines, 13, 16))
+  	
+  	aa_coord
+  })
+  names(aa_coords) <- names(aa_files)
+  
+  aa_bond_separation <- lapply(aa_coords, bond_separation)
+  names(aa_bond_separation) <- names(aa_coords)
+  
+  base_chi_atoms <- c("N", "CA", "CB")
+  
+  chi_angles <- t(sapply(rownames(chi_atoms), function(aa) {
+  
+  	sapply(seq_len(ncol(chi_atoms)), function(i) {
+  	
+  		if (is.na(chi_atoms[aa,i])) {
+  			NA
+  		} else {
+  			dihedral_atoms <- tail(c(base_chi_atoms, chi_atoms[aa,seq_len(i)]), 4)
+  			xyz <- aa_coords[[aa]][,dihedral_atoms]
+  			dihedral_angle(xyz)
+  		}
+  	})
+  }))
+  
+  chi_h_couplings <- NULL
+  
+  for (aa in rownames(chi_atoms)) {
+  
+  	for (i in which(!is.na(chi_atoms[aa,]))) {
+  	
+  		central_atoms <- tail(c(base_chi_atoms, unname(chi_atoms[aa,seq_len(i)])), 4)[2:3]
+  		bond_sep_mat <- aa_bond_separation[[aa]]
+  		bond_sep_names <- rownames(bond_sep_mat)
+  		inner_atoms_1 <- setdiff(bond_sep_names[bond_sep_mat[,central_atoms[1]] == 1 & !is.na(bond_sep_mat[,central_atoms[1]])], central_atoms)
+  		inner_atoms_2 <- setdiff(bond_sep_names[bond_sep_mat[,central_atoms[2]] == 1 & !is.na(bond_sep_mat[,central_atoms[2]])], central_atoms)
+  		inner_atoms <- c(inner_atoms_1, inner_atoms_2)
+  		h1 <- inner_atoms_1[startsWith(inner_atoms_1, "H")]
+  		h2 <- inner_atoms_2[startsWith(inner_atoms_2, "H")]
+  		c_count <- sum(startsWith(inner_atoms, "C"))
+  		n_count <- sum(startsWith(inner_atoms, "N"))
+  		o_count <- sum(startsWith(inner_atoms, "O"))
+  		s_count <- sum(startsWith(inner_atoms, "S"))
+  		h_grid <- unname(as.matrix(expand.grid(h2, h1)))[,2:1,drop=FALSE]
+  		for (j in seq_len(nrow(h_grid))) {
+  			dihedral_atoms <- c(h_grid[j,1], central_atoms, h_grid[j,2])
+  			xyz <- aa_coords[[aa]][,dihedral_atoms]
+  			dihedral <- dihedral_angle(xyz)
+  			deltachi <- dihedral - chi_angles[aa,i]
+  			deltachi <- ((deltachi + pi) %% (2*pi)) - pi
+  			deltachi <- round(deltachi / (2/3*pi)) * (2/3*pi)
+  			deltachi <- deltachi * 180/pi
+  			chi_h_couplings <- rbind(
+  				chi_h_couplings,
+  				data.frame(aa=aa, chi=i, delta=round(deltachi, 1), h1=h_grid[j,1], h2=h_grid[j,2], c=c_count, n=n_count, o=o_count, s=s_count)
+  			)
+  		}
+  		
+  		inner_atoms_2_nums <- suppressWarnings(as.integer(sub(".+(.)", "\\1", inner_atoms_2)))
+  		inner_atoms_2_nums[is.na(inner_atoms_2_nums)] <- setdiff(1:3, inner_atoms_2_nums)
+  		inner_atoms_2 <- inner_atoms_2[order(inner_atoms_2_nums)]
+  		inner_atoms_2_angles <- sapply(inner_atoms_2, function(inner_atom_2) {
+  			dihedral_atoms <- c(tail(c(base_chi_atoms, chi_atoms[aa,seq_len(i-1)]), 3), inner_atom_2)
+  			xyz <- aa_coords[[aa]][,dihedral_atoms]
+  			dihedral_angle(xyz)
+  		})
+  		names(inner_atoms_2_angles) <- inner_atoms_2
+  		inner_atoms_2_angle_diff <- diff(rep(inner_atoms_2_angles, length.out=4))
+  		inner_atoms_2_angle_diff <- ((inner_atoms_2_angle_diff + pi) %% (2*pi)) - pi
+  	}
+  }
+  
+  rownames(chi_h_couplings) <- NULL
+  
+  chi_h_tab <- as.matrix(chi_h_couplings)
+  colnames(chi_h_tab) <- c("AA", "$\\chi$ \\#", "$\\Delta \\chi$", "H\\textsubscript{1}", "H\\textsubscript{2}", "$N_\\mathrm{C}$", "$N_\\mathrm{N}$", "$N_\\mathrm{O}$", "$N_\\mathrm{S}$")
+  substr(chi_h_tab[,1], 1, 1) <- toupper(substr(chi_h_tab[,1], 1, 1))
+  chi_h_tab <- cbind(chi_h_tab[1:39,], chi_h_tab[c(40:77, NA),])
+  chi_h_tab[is.na(chi_h_tab)] <- ""
+  ```
+  
+  ```{r echo = FALSE}
+  huggins_en <- c(
+  	H=2.20,
+  	C=2.60, N=3.05, O=3.50, F=3.9,
+  	Si=1.90, P=2.15, S=2.60, Cl=3.15,
+  	Ge=1.90, As=2.10, Se=2.55, Br=2.95
+  )
+  
+  p_list <- list(
+  	B=c(13.70, -0.73, 0, 0.56, -2.47, 16.9, 0.14),
+  	C=c(13.89, -0.98, 0, 1.02, -3.40, 14.9, 0.24),
+  	D=c(13.22, -0.99, 0, 0.87, -2.46, 19.9, 0),
+  	E=c(13.24, -0.91, 0, 0.53, -2.41, 15.5, 0.19)
+  )
+  
+  param_set <- function(delta_en) {
+  
+  	param_letter <- "B"
+  	# parameter set C not recommended on page 2790 of https://doi.org/10.1002/bip.1981.360200610
+  	#if (sum(alpha_delta_en != 0) == 2) {
+  	#	param_letter <- "C"
+  	#}
+  	if (sum(alpha_delta_en != 0) == 3) {
+  		param_letter <- "D"
+  	}
+  	if (sum(alpha_delta_en != 0) == 4) {
+  		param_letter <- "E"
+  	}
+  	
+  	p_list[[param_letter]]
+  }
+  
+  chi_h_delta_en <- NULL
+  
+  for (i in seq_len(nrow(chi_h_couplings))) {
+  
+  	h1 <- chi_h_couplings[i,"h1"]
+  	h2 <- chi_h_couplings[i,"h2"]
+  	aa <- chi_h_couplings[i,"aa"]
+  	bond_sep_mat <- aa_bond_separation[[aa]]
+  	bond_sep_names <- rownames(bond_sep_mat)
+  	central_atoms <- c(
+  		bond_sep_names[bond_sep_mat[,h1] == 1 & !is.na(bond_sep_mat[,h1])], 
+  		bond_sep_names[bond_sep_mat[,h2] == 1 & !is.na(bond_sep_mat[,h2])]
+  	)
+  	atoms <- c(central_atoms, h1, h2)
+  	s12 <- setdiff(bond_sep_names[bond_sep_mat[,central_atoms[1]] == 1 & !is.na(bond_sep_mat[,central_atoms[1]])], atoms)
+  	s34 <- setdiff(bond_sep_names[bond_sep_mat[,central_atoms[2]] == 1 & !is.na(bond_sep_mat[,central_atoms[2]])], atoms)
+  	s12_angles <- sapply(s12, function(x) dihedral_angle(aa_coords[[aa]][,c(h1, central_atoms, x)]))
+  	s34_angles <- sapply(s34, function(x) dihedral_angle(aa_coords[[aa]][,c(h2, rev(central_atoms), x)]))
+  	alpha_atoms <- c(
+  		names(which.max(s12_angles)),
+  		names(which.min(s12_angles)),
+  		names(which.max(s34_angles)),
+  		names(which.min(s34_angles))
+  	)
+  	beta_atoms <- lapply(alpha_atoms, function(x) setdiff(bond_sep_names[bond_sep_mat[,x] == 1 & !is.na(bond_sep_mat[,x])], atoms))
+  	# change beta atoms to what would be in a polypeptide chain
+  	if (chi_h_couplings[i,"chi"] == 1) {
+  	  #beta_atoms[[1]] <- c("H", "C") # amide N
+  	  #beta_atoms[[2]] <- c("O", "N") # amide C
+  	}
+  	alpha_delta_en <- sapply(alpha_atoms, function(x) sum(huggins_en[sub("([A-Z][a-z]*).+", "\\1", x)]-huggins_en["H"]))
+  	beta_delta_en <- sapply(beta_atoms, function(x) sum(huggins_en[sub("([A-Z][a-z]*).+", "\\1", x)]-huggins_en["H"]))
+  	names(beta_delta_en) <- alpha_atoms
+  	p <- param_set(alpha_delta_en)
+  	deltan_en <- alpha_delta_en - p[7]*beta_delta_en
+  	
+  	chi_h_delta_en <- rbind(chi_h_delta_en, unname(deltan_en))
+  }
+  
+  chi_haasnoot_tab <- as.matrix(chi_h_couplings)
+  chi_haasnoot_tab[,6:9] <- sub("0.000", "0", sprintf("%0.3f", chi_h_delta_en))
+  colnames(chi_haasnoot_tab) <- c("AA", "$\\chi$ \\#", "$\\Delta \\chi$", "H\\textsubscript{1}", "H\\textsubscript{2}", "$\\Delta \\chi^\\mathrm{g}_1$", "$\\Delta \\chi^\\mathrm{g}_2$", "$\\Delta \\chi^\\mathrm{g}_3$", "$\\Delta \\chi^\\mathrm{g}_4$")
+  substr(chi_haasnoot_tab[,1], 1, 1) <- toupper(substr(chi_haasnoot_tab[,1], 1, 1))
+  chi_haasnoot_tab <- cbind(chi_haasnoot_tab[1:39,], chi_haasnoot_tab[c(40:77, NA),])
+  chi_haasnoot_tab[is.na(chi_haasnoot_tab)] <- ""
+  ```
+
+  
+  ```{r echo = FALSE}
+  c0_hh <- function(c_count, n_count, o_count, s_count, n_delta=0) {
+  
+  	if (!is.null(dim(c_count)) && dim(c_count)[2] == 4) {
+  		n_count <- c_count[,2]
+  		o_count <- c_count[,3]
+  		s_count <- c_count[,4]
+  		c_count <- c_count[,1]
+  		}
+  	fundamental <- 7.24 - n_delta
+  	fundamental - 0.61*c_count + n_delta*n_count - 1.59*o_count - 1.30*s_count
+  }
+  
+  coupling_hh <- function(chi, delta_chi, c0, c1=-1.37, c2=3.61) {
+  	
+  	theta <- chi + delta_chi
+  	c0 + c1*cos(theta) + c2*cos(2*theta)
+  }
+  
+  coupling_haasnoot <- function(chi, delta_chi, delta_en, p=param_set(delta_en)) {
+  	
+  	theta <- chi + delta_chi
+  	
+  	signs <- c(1, -1, 1, -1)
+  	theta <- theta/180*pi
+  	p[6] <- p[6]/180*pi
+  	
+  	p[1]*cos(theta)^2 + p[2]*cos(theta) + p[3] + colSums(delta_en*(p[4] + p[5]*cos(signs %o% theta + p[6]*abs(delta_en))^2))
+  }
+  
+  theta <- seq(0, 360, by=1)
+  
+  perez_ids <- apply(chi_h_couplings[,6:9], 1, paste, collapse=" ")
+  haasnoot_ids <- apply(matrix(sprintf("%0.3f", chi_h_delta_en), nrow=nrow(chi_h_delta_en)), 1, paste, collapse=" ")
+  coupling_360_list <- lapply(unique(perez_ids), function(perez_id) {
+    c0 <- c0_hh(chi_h_couplings[which(perez_id == perez_ids)[1], 6:9, drop=FALSE])
+    j_perez <- coupling_hh(theta/180*pi, 0, c0)
+    j_haasnoot <- sapply(unique(haasnoot_ids[perez_id == perez_ids]), function(haasnoot_id) {
+      coupling_haasnoot(theta, 0, chi_h_delta_en[which(haasnoot_id == haasnoot_ids)[1], ])
+    })
+    cbind(j_perez, j_haasnoot)
+  })
+  names(coupling_360_list) <- unique(perez_ids)
+  ```
+  
+  ```{r echo = FALSE, results = 'asis'}
+  table <- knitr::kable(chi_haasnoot_tab, "latex", row.names = FALSE, caption = "Generalized Karplus equation parameters for \\chem{\\phantom{}^1H}-\\chem{\\phantom{}^1H} \\chem{\\phantom{}^3J} couplings. $\\Delta \\chi^\\mathrm{g}_i$ give difference in substituent group electronegativity.", label = "chidatahaasnoot", escape = FALSE)
+  table[] <- sub("([\\]begin[{]tabular[}])", "\\\\setlength{\\\\tabcolsep}{4.5pt}\n\\\\renewcommand{\\\\arraystretch}{0.85}\n\\1", table[])
+  print(table)
+  ```
+  
+  ```{r echo = FALSE, results = 'asis'}
+  table <- knitr::kable(chi_h_tab, "latex", row.names = FALSE, caption = "Self-consistent Karplus equation parameters for \\chem{\\phantom{}^1H}-\\chem{\\phantom{}^1H} \\chem{\\phantom{}^3J} couplings. $N_i$ give number of each type of substituent heavy atom.", label = "chidataperez", escape = FALSE)
+  table[] <- sub("([\\]begin[{]tabular[}])", "\\\\renewcommand{\\\\arraystretch}{0.85}\n\\1", table[])
+  print(table)
+  ```
+  
+  ```{r, fig.dim = c(17.8,17.8)/2.54, dev.args = list(pointsize = 8), echo = FALSE, label = "figA1:equationcomp", fig.cap = "\\label{fig:equationcomp}Generalized Karplus equation (thin lines) and self-consistent Karplus equation (dashed lines) for proton-proton $\\phantom{}^3J$ scalar couplings across different chi angles. The numbers of atoms ($N_i$) used for generating the self-consistent Karplus curves are given as a subtitle. The generalized Karplus curve phase shifts observed in **F** and **I** come from large differences in the electronegativity between substituents 3 and 4 (see Table \\ref{tab:chidatahaasnoot})."}
+  figure_letter <- function(letter) {
+  	old_usr <- par("usr")
+  	if (par("xlog")) old_usr[1:2] <- 10^old_usr[1:2]
+  	if (par("ylog")) old_usr[3:4] <- 10^old_usr[3:4]
+  	old_par <- par(mar=c(0.2,0.2,0.2,0.2))
+  	plot.window(old_usr[1:2], old_usr[3:4])
+  	mtext(letter, 3, -1, adj=0, font=2)
+  	par(old_par)
+  	plot.window(old_usr[1:2], old_usr[3:4])
+  }
+  ylim <- do.call(range, coupling_360_list)
+  par(mar=c(4, 3, 1.5, 0.5), mgp=c(1.7, 0.6, 0), mfrow=c(3, 3), cex=1)
+  letters <- c("A", "B", "C", "D", "E", "F", "G", "H", "I")
+  for (i in seq_along(coupling_360_list)) {
+    chis <- unique(chi_h_couplings[which(names(coupling_360_list)[i] == perez_ids),1:2])
+    substr(chis[,"aa"], 1, 1) <- toupper(substr(chis[,"aa"], 1, 1))
+    chi_list <- tapply(chis[,"aa"], chis[,"chi"], c)
+    chi_label <- sapply(chi_list, function(x) paste(x, collapse=", "))
+    chi_label <- paste("chi*", names(chi_label), "*\": ", chi_label, "\"", sep="", collapse="~~~~")
+    main <- chi_label
+    subtext <- sub("([0-9]) ([0-9]) ([0-9]) ([0-9])", "N[C] == \"\\1,\" ~ N[N] == \"\\2,\" ~ N[O] == \"\\3,\" ~ N[S] == \"\\4\"", names(coupling_360_list)[i])
+    plot(theta, coupling_360_list[[i]][,1], type="l", lty="dashed", ylim=ylim, xaxt="n", xlab=expression(theta ~ "(°)"), ylab=expression(phantom()^3*J~ "(Hz)"), main=parse(text=main), cex.main=0.6, sub=parse(text=subtext), cex.sub=0.6)
+    axis(1, seq(0, 360, by=30))
+    for (j in seq_len(ncol(coupling_360_list[[i]]))[-1]) {
+      points(theta, coupling_360_list[[i]][,j], type="l", lwd=0.25)
+    }
+    figure_letter(letters[i])
+  }
+  ```
+  
+  \clearpage
+  
+output:
+  rticles::copernicus_article: 
+    highlight: NULL
+    keep_tex: true
+  bookdown::pdf_book:
+    base_format: rticles::copernicus_article # for using bookdown features like \@ref()
+---
+
+\introduction[Introduction]
+
+The structure and dynamics of amino acid side chains is often critical for protein function. Side chains are not only an important part of the folded structure of proteins, but also key in facilitating molecular recognition, allosteric regulation, and catalysis. Nuclear magnetic resonance (NMR) is a particularly powerful technique for studying side chains as they move in solution at physiological temperatures. $\phantom{}^3J$ scalar couplings give the most direct information about the local structure of side chains through the mathematical relationship between the dihedral angles of rotatable bonds and $\phantom{}^3J$, which was originally formulated by @Karplus:1963aa. The numerous NMR experiments for measuring protein scalar couplings have been reviewed in detail by @Vuister:2002aa. Notably, it is possible to measure every scalar coupling involved in the side chain chi 1 angle, including $\phantom{}^3J$(HA-HB), $\phantom{}^3J$(C-HB), $\phantom{}^3J$(N-HB),$\phantom{}^3J$(HA-CG), $\phantom{}^3J$(N-CG), and  $\phantom{}^3J$(C-CG). (Protein Data Bank (PDB) atom names are used throughout this manuscript.)
+
+Homonuclear proton-proton couplings, which are the focus of the present study, result in sometimes complex multiplet patterns in one-dimensional proton NMR spectra. Numerous pulse sequences have been developed to overcome this complexity and make proton-proton couplings easier to resolve and quantify in multidimensional spectra. The first was Exclusive Correlation Spectroscopy (E.COSY) [@Griesinger:1985aa;@Griesinger:1986aa;@Griesinger:1987aa], which generates cross-peak multiplets with reduced numbers of peaks and takes advantage of passive couplings to make line splitting by the active coupling visible for inspection and quantification. For \chem{\phantom{}^{13}C}-labeled samples, this idea was extended using modified versions of the HCCH-COSY and HCCH-TOCSY experiments, where $\phantom{}^1J$(C-H) was used to resolve $\phantom{}^3J$(H-H). [@Gemmecker:1991aa;@Griesinger:1992aa;@Emerson:1992aa] An HXYH experiment further improved experimental efficiency by simultaneously measuring both backbone and side chain $\phantom{}^3J$ couplings using \chem{\phantom{}^{13}C^{15}N}-labeled proteins. [@Tessari:1995aa;@Lohr:1999aa] Another class of experiments, quantitative J correlation, use the ratio between a diagonal and cross peak to determine the value of the coupling constant, first demonstrated with the HNHA experiment which measures the backbone $\phantom{}^3J$(H-HA). [@Vuister:1993aa] An HACACB-COSY adaptation of this technique enabled quantification of side chain couplings. [@Grzesiek:1995aa]
+
+Another approach for obtaining scalar couplings uses numerical processing of a pair of matched experimental spectra, one having in-phase peaks with the same sign and the other having anti-phase peaks with opposite signs. [@Oschkinat:1984aa;@Kessler:1985aa;@Titman:1990aa;@Huber:1993aa;@Prasch:1998aa] In these methods, a pair of trial anti-phase/in-phase peaks are convolved with a multiplet in the respective spectra. The coupling is determined by finding the separation between the trial peaks that results in maximum agreement between the two convolved spectra. However, peak overlap can be a problem with these types of methods because only a single multiplet is analyzed at a time.
+
+Various approaches have been applied to directly fit peak multiplets that can handle peak overlap. SpinEvolution [@Veshtort:2006aa], Quantum Mechanical Total-Line-Shape Fitting (QMTLS) in PERCH (PERCH Solutions), ChemAdder [@Tiainen:2014aa], Guided Ideographic Spin System Model Optimization (GISSMO) [@Dashti:2017aa;@Dashti:2018aa], ANATOLIA [@Cheshkov:2018aa], and Cosmic Truth (NMR Solutions) [@Achanta:2021aa] enable fitting of a one-dimensional spectrum by iteratively optimizing parameters used to simulate the spectrum using a quantum mechanical description of the spin system(s). [@Castellano:1964aa;@Heinzer:1977aa;@Cheshkov:2020aa] Such calculations account for cases where the chemical shift difference between two nuclei approach the value of their scalar coupling. This leads to strong coupling and the so-called "roofing effect" where peaks in the multiplet closest to the other nucleus increase in intensity and those farthest decrease in intensity. While such calculations are usually computationally intensive, methods have been developed to very rapidly simulate 1D spectra. [@Castillo:2011aa] Global Spectral Deconvolution (GSD) in Mnova NMR (Mestrelab Research) enables fitting individual peaks in 1D spectra and classification of peaks into multiplets. [@Bernstein:2013aa] More recently, deep neural networks have been combined with lineshape fitting to automatically quantify peaks in 1D spectra. [@Li:2023aa]
+
+Several methods exist for fitting multidimensional spectra including PINT [@Ahlner:2013aa;@Niklasson:2017aa] and INFOS [@Smith:2017aa], but those tools do not explicitly model scalar couplings. Amplitude-Constrained Multiplet Evaluation (ACME) was developed to fit proton-proton scalar couplings in COSY cross peaks. [@Delaglio:2001aa] Explicit modeling of scalar couplings in multidimensional spectra can also be done in Spinach [@Hogben:2011aa], which is a widely used software library optimized for simulations of large spin systems. However, like the commercially available NMRSim (Bruker) that can also simulate multidimensional spectra, the calculations can be time-consuming and are not typically used for direct spectral fitting.
+
+Once accurate $\phantom{}^3J$ couplings have been measured and quantified, they can be interpreted using the Karplus relationship, which relates $\phantom{}^3J$ to a linear combination of $\cos \theta$ and either $\cos 2 \theta$ or $\cos^2 \theta$, where $\theta$ is the dihedral angle between the coupled nuclei. The three coefficients (a constant and two scaling factors for the $\cos$ functions) determine the Karplus parameterization. The coefficients for proteins have been most often determined using a large set of scalar coupling measurements for which coordinates from X-ray crystallography are also available. A structure-free approach to parameterizing scalar couplings was developed by @Schmidt:1999aa. It depends on the measurement of many different scalar couplings, each with a different relationship to the overall dihedral angle. By having many scalar couplings, both the dihedral angles of the chemical bonds and the associated Karplus parameters can be determined in a self-consistent manner. This approach was originally applied to scalar couplings in the protein backbone [@Schmidt:1999aa] and then expanded to side chains [@Perez:2001aa]. Two decades earlier, a model known as the generalized Karplus equation was parameterized primarily using data from small molecules with six membered rings. [@Haasnoot:1979aa;@Haasnoot:1980aa;@Haasnoot:1981a;@Haasnoot:1981b] This approach used a formula incorporating differences in electronegativity between hydrogen and the substituted heavy atoms, the orientation of the substituent relative to the hydrogen, and the electronegativities of secondary substituents.
+
+One of the first studies into the conformational preferences of amino acids using scalar couplings examined the effect of N- and C-terminal charge states on the rotamer equilibrium. [@Pachler:1963aa] For individual amino acids, the ContinUous ProbabIlity Distribution (CUPID) method was developed that also incorporated information from nuclear Overhauser effect experiments. [@Dzakula:1992aa] That and numerous other methods for analyzing scalar coupling data to determine dihedral angles and distributions have been reviewed. [@Kraszni:2004aa] Scalar couplings are also used to determine conformational ensembles of proteins using the standard and generalized Karplus equations. [@Steiner:2012aa] In the context of full proteins, molecular dynamics enhanced sampling techniques have been shown to improve convergence and fit to experimental data. [@Smith:2021aa] Beyond scalar couplings, residual dipolar couplings have also been used to analyze side chain conformations in folded proteins. [@Mittermaier:2001aa;@Li:2015aa]
+
+The $\phantom{}^3J$(H-HA) scalar coupling is dependent on the phi backbone dihedral angle and takes distinct values depending on whether the residue is part of an alpha helix or beta sheet. In most heteronuclear NMR spectra, the power output required for decoupling \chem{\phantom{}^{13}C} and/or \chem{\phantom{}^{15}N} in isotopically labeled proteins limits the direct-dimension acquisition time, leading to signal truncation that hinders resolution of the $\phantom{}^3J$(H-HA) line splitting. Increasing molecular size also broadens the linewidths, further exacerbating the resolution. However, we recently showed that through very precise modeling of signal truncation and apodization, $\phantom{}^3J$(H-HA) could be quantified in ordinary \chem{\phantom{}^1H-^{15}N} 2D spectra using nonlinear least squares fitting in FitNMR. [@Dudley:2020] A byproduct of this fitting is that the \chem{\phantom{}^1H} transverse relaxation rate, $R_2^*$, can also be quantified, which can provide valuable information about protein structure and dynamics. [@Dudley:2024]
+
+Towards the ultimate goal of being able to similarly quantify side-chain \chem{\phantom{}^1H} scalar couplings and $R_2^*$ values directly from multidimensional spectra of folded proteins, as well as extract accurate volumes for highly overlapped peaks, we present an analysis of the proton-proton couplings in \chem{\phantom{}^1H} spectra of individual amino acids. We describe how FitNMR was enhanced to directly model complex multiplet patterns in multidimensional spectra using a simple tabular input/output format. The strengths and weaknesses of using a model that assumes purely weak-coupling interactions are illustrated. To obtain Karplus parameters, we extend a self-consistent parameterization of $\phantom{}^3J$(HA-HB) couplings to include $\phantom{}^3J$(HB-HG), $\phantom{}^3J$(HG-HD), and $\phantom{}^3J$(HD-HE). Finally, we apply an enhanced model of side chain motion incorporating prior rotameric information to determine differences in the conformational preferences between the side chains of free amino acids and those found in crystal structures.
+
+# Methods
+
+```{r, echo = FALSE, label = "readtables"}
+fit_dirs <- list.files("fit1d", pattern = "^1H$", full.names = TRUE, recursive = TRUE, include.dirs = TRUE)
+names(fit_dirs) <- sub("fit1d/([^/]+)/.+", "\\1", fit_dirs)
+tables_list <- lapply(fit_dirs, function(dir) {
+  resonances <- read.csv(text=readLines(file.path(dir, "resonances.csv"), warn=FALSE), row.names=1, check.names=FALSE)
+  # fix for glycine which doesn't have any scalar couplings
+	resonances[,"x_sc"] <- as.character(resonances[,"x_sc"])
+	resonances[is.na(resonances[,"x_sc"]),"x_sc"] <- ""
+	nuclei <- read.csv(text=readLines(file.path(dir, "nuclei.csv"), warn=FALSE), row.names=1, check.names=FALSE)
+	couplings <- read.csv(text=readLines(file.path(dir, "couplings.csv"), warn=FALSE), row.names=1, check.names=FALSE)
+	list(resonances = resonances, nuclei = nuclei, couplings = couplings)
+})
+names(tables_list) <- names(fit_dirs)
+```
+
+## Fitting couplings in multidimensional spectra
+
+FitNMR [@Dudley:2020] was originally designed such that each peak in a multiplet would be a distinct entity. To allow for scalar couplings, the chemical shifts of a given peak could be made a linear combination of auxiliary chemical shift parameters, whose coefficients were chosen such that a scalar coupling in \unit{Hz} could be mapped onto the \unit{ppm} scale. While this functioned well for fitting simple doublets found in protein \chem{\phantom{}^1H-^{15}N} 2D spectra, it did not scale well to other applications, especially complicated spectra with heterogeneous coupling patterns.
+
+```{r echo = FALSE, label = "tab1:ileresonances", results = "asis"}
+knitr::kable(tables_list[["ile"]][["resonances"]], "latex", caption = "Isoleucine resonances table", label = "ileresonances")
+```
+
+To address this, we developed a new way of defining NMR spectral features, for which we use the term resonances. They are defined in a comma separated values (CSV) `resonances` text file, with an example for isoleucine shown in Table \ref{tab:ileresonances}. The first column gives the name of the resonance, which can be arbitrarily defined. FitNMR supports up to four spectral dimensions, referred to using the names `x`, `y`, `z`, and `a`, following nomenclature used by NMRPipe [@Delaglio:1995aa]. The particular nucleus associated with each dimension is given in the column with the same name as the dimension. Scalar couplings active in each dimension are given in a corresponding column whose name has the `_sc` suffix. They are space delimited and can also be arbitrarily named, although no nucleus and scalar coupling may share the same name. A scalar coupling can appear several times to produce canonical multiplets like triplets, quartets, etc. For instance, in isoleucine the HB resonance definition produces a doublet of doublets of doublets of quartets, with couplings to HA, HG12, HG13 each producing a doublet and couplings to the HG2 methyl group producing a quartet. Additional columns give the volumes associated with individual spectra, referred to by FitNMR as `m0` (initial magnetization).
+
+```{r echo = FALSE, label = "tab1:ilenuclei", results = "asis"}
+knitr::kable(tables_list[["ile"]][["nuclei"]], "latex", caption = "Isoleucine nuclei table", label = "ilenuclei", format.args = list(digits = 3))
+```
+
+```{r echo = FALSE, label = "tab1:ilecouplings", results = "asis"}
+knitr::kable(tables_list[["ile"]][["couplings"]], "latex", caption = "Isoleucine scalar couplings table", label = "ilecouplings", format.args = list(digits = 3))
+```
+
+Each nucleus referred to in the `resonances` table is defined in the `nuclei` table, with an example for isoleucine shown in Table \ref{tab:ilenuclei}. The first column gives the nucleus name. The second `omega0_ppm` column gives the chemical shift offset, $\Omega_0$, in \unit{ppm}. The third `r2_hz` column gives the transverse relaxation rate (including an inhomogeneous contribution), $R_2^*$, in \unit{Hz}. The coupling table (Table \ref{tab:ilecouplings}) just has a single `hz` data column with the value of the scalar coupling in \unit{Hz}. Because they are associated with saturated carbons, all $\phantom{}^2J$ couplings are assumed to be negative. However, in the present work the sign has no impact because all couplings are in-phase. CSV files for all fitted parameters are available in the `data/fit1d_fitnmr_output.tar.gz` file within the supplement ZIP archive.
+
+## Fitting amino acid 1D spectra
+
+Starting parameters for fitting amino acid 1D NMR spectra were adapted from the Guided Ideographic Spin System Model Optimization (GISSMO) database [@Dashti:2017aa; @Dashti:2018aa], with couplings added or removed as appropriate. Chemical shifts were manually altered to account for differences in referencing and effects of strong coupling which FitNMR does not currently model. Standard PDB atom names were used. When two nonmethyl protons were modeled with a single chemical shift, their respective numbers were separated by a slash. For methyl protons, the last number identifying each proton was dropped from the name. Geminal proton names were assigned to follow the ordering observed in BMRB statistics (https://bmrb.io/histogram/) and do not reflect a stereospecific analysis of the fitted $\phantom{}^3J$ coupling values.
+
+Fitting was done with the `refit_peaks.R` script from FitNMR 0.7. The spectra were fit in a region ±0.02 \unit{ppm} from the starting peaks in each multiplet. The chemical shift was allowed to move up to 3.5 times the starting $R_2^*$ during fitting. $R_2^*$ was constrained to be 0.1 to 2 \unit{Hz} and the scalar couplings were constrained to be -20 to 20 \unit{Hz}.
+
+## Karplus parameters for side chain chi angles {#methodskarplus}
+
+When spanning a rotatable bond, $\phantom{}^3J$ scalar couplings provide information about the dihedral angle ($\theta$) between the two coupled atoms through the well-known Karplus relationship [@Karplus:1963aa]:
+\begin{equation}
+\label{eq:karplus}
+\phantom{}^3J(\theta) = C_0 + C_1 \cos \theta + C_2 \cos 2 \theta
+\end{equation}
+
+An alternative formulation of the Karplus relationship dependent on $\cos \theta$ and $\cos^2 \theta$ terms is often used. Here we apply two enhanced forms of the Karplus equation, one that is known as the generalized Karplus equation [@Haasnoot:1980aa] and another which we will refer to as the self-consistent Karplus equation [@Perez:2001aa]. In this work both are applied to \chem{H_1-C_1-C_2-H_2} dihedral angles in protein side chains. The generalized Karplus equation [@Haasnoot:1980aa] is:
+\begin{equation}
+\label{eq:karplushaasnoot}
+\phantom{}^3J(\theta) = P_1 \cos^2 \theta + P_2 \cos \theta + P_3 + \sum \Delta \chi^\mathrm{g}_i \left ( P_4 + P_5 \cos^2(\xi_i \theta + P_6 | \Delta \chi^\mathrm{g}_i | ) \right )
+\end{equation}
+
+The $\Delta \chi^\mathrm{g}_i$ terms give the electronegativity difference between the four other substituent groups (\chem{S_1} to \chem{S_4}) bonded to the central \chem{C_1-C_2} atom pair. They are calculated using the difference in Huggins electronegativity [@Huggins:1953aa] between hydrogen and the $\alpha$ atom (bonded to \chem{C_1} or \chem{C_2}) and $\beta$ atoms (bonded to the $\alpha$ atom) in each substituent group:
+\begin{equation}
+\label{eq:groupdelteen}
+\Delta \chi^\mathrm{g} = \Delta \chi^\alpha - P_7 \sum \Delta \chi^\beta_j
+\end{equation}
+
+Here we follow the geometric standard described by @Haasnoot:1980aa where \chem{S_1} and \chem{S_2} are bonded to \chem{C_1}, with \chem{S_1} directly clockwise from \chem{H_1} on a Newman projection with \chem{C_1} in front of \chem{C_2}, and \chem{S_2} directly counterclockwise from \chem{H_1}. \chem{S_3} and \chem{S_4} are directly clockwise and counterclockwise, respectively, from \chem{H_2} on a Newman projection with \chem{C_2} in front of \chem{C_1}. $\xi_i$ gives the sign of rotation and is +1 for \chem{S_1}/\chem{S_3} and -1 for \chem{S_2}/\chem{S_4}.
+
+Parameters $P_1$ to $P_7$ were derived from fits to couplings in primarily six-membered ring structures with restricted geometries. [@Haasnoot:1980aa] Parameter set B ($P_1=13.7$, $P_2=-0.73$, $P_3=0$, $P_4=0.56$, $P_5=-2.47$, $P_6=16.9^\circ$, $P_7=0.14$) was derived from couplings with two to four substituents. Parameter set D ($P_1=13.22$, $P_2=-0.99$, $P_3=0$, $P_4=0.87$, $P_5=-2.46$, $P_6=19.9^\circ$, $P_7=0$) was derived from couplings with three substituents. Parameter set E ($P_1=13.24$, $P_2=-0.91$, $P_3=0$, $P_4=0.53$, $P_5=-2.41$, $P_6=15.5^\circ$, $P_7=0.19$) was derived from couplings with four substituents. Here we follow recommendations by @Haasnoot:1980aa using parameter sets B, D, and E for couplings with two, three, and four substituents, respectively.
+
+For this work, we determined the complete set of parameters ($\Delta \chi^\mathrm{g}_1$ to $\Delta \chi^\mathrm{g}_4$) necessary for generalized Karplus analysis of proton-proton couplings associated with chi 1-4 by analyzing representative amino acid structures taken from the PDB Chemical Component Directory (CCD). [@Westbrook:2015aa] An example representative structure for isoleucine is shown in Figure \ref{fig:ilefit}A and the parameters determined for all amino acids are given in Table \ref{tab:chidatahaasnoot}.
+
+The self-consistent Karplus equation [@Schmidt:1999aa] perturbs the average scalar coupling given by the $C_0$ coefficient in equation \ref{eq:karplus} using a set of increments ($\Delta C_{0,i}$) weighted by the number ($N_i$) of proton/heavy atom $\alpha$-substitutions made around the bond for a particular element type $i$:
+\begin{equation}
+\label{eq:karplusperez}
+\phantom{}^3J(\theta) = C_0 + \sum(N_i \Delta C_{0,i}) + C_1 \cos \theta + C_2 \cos 2 \theta
+\end{equation}
+
+This formulation makes it possible to extrapolate the parameterization to chemical substructures outside the training set. For side chain proton-proton $\phantom{}^3J$ couplings, the following previously determined [@Perez:2001aa] coefficients and coefficient increments were used: $C_0 = 7.24$, $C_1 = -1.37$, $C_2 = 3.61$, $\Delta C_{0,\mathrm{C}} = 0.61$, $\Delta C_{0,\mathrm{O}} = -1.59$, and $\Delta C_{0,\mathrm{S}} = -1.30$ \unit{Hz}. The offset for nitrogen atoms was previously defined $\Delta C_{0,\mathrm{N}} = 0$ \unit{Hz} because $N_\mathrm{N} = 1$ for all side chain chi 1 angles, making it impossible to separate the contribution of a nitrogen substitution from the fundamental Karplus coefficient $C_0$. For the chi 1 dihedral angle, the heavy atom substitution counts were previously published. [@Perez:2001aa] Here, we determined the number of $\alpha$-substituents for proton-proton couplings associated with chi 1-4, which are given in given in Table \ref{tab:chidataperez}.
+
+In equations \ref{eq:karplus}, \ref{eq:karplushaasnoot}, and \ref{eq:karplusperez}, the $\theta$ angle refers to the dihedral angle between the two coupled protons, which is often offset from the canonical side chain chi angle ($\chi$) by a given value, $\Delta \chi$:
+$$\theta = \chi + \Delta \chi$$
+
+In this manuscript, whenever the $\chi$ symbol has a superscript (like $\mathrm{g}$, $\alpha$, or $\beta$), it refers to electronegativity. All other instances of $\chi$ refer to side chain dihedral angles. Using the CCD representative amino acid structures, we determined $\Delta \chi$ offsets (rounded to -120°, 0°, and 120°) for chi angles 1-4, which are given in given in Tables \ref{tab:chidatahaasnoot} and \ref{tab:chidataperez}.
+
+A comparison of the generalized and self-consistent Karplus equations is shown in Figure \ref{fig:equationcomp}. Over the nine sets of unique self-consistent parameters, the range of coupling values sampled by the generalized parameters is `r sprintf("%0.1f", (mean(sapply(lapply(lapply(coupling_360_list, apply, 2, range), apply, 2, diff), function(x) mean(x[-1]-x[1])))))` \unit{Hz} greater on average than the self-consistent parameters. Whereas the generalized Karplus equation was parameterized on bonds geometrically restricted by rings, the self-consistent equation was parameterized using data from a protein in solution. While efforts were made to account for the effects of protein motional averaging in the self-consistent parameterization (see below), it could be that the degree of protein motion was underestimated, resulting in less extreme Karplus curves in order to reproduce the measured scalar couplings. The generalized parameters also produce slightly higher couplings overall, with an average coupling value `r sprintf("%0.1f", (mean(sapply(lapply(coupling_360_list, apply, 2, mean), function(x) mean(x[-1]-x[1])))))` \unit{Hz} greater than the self-consistent parameters. Finally, averaging over the nine sets, there is a `r sprintf("%0.1f", mean(sapply(coupling_360_list, function(x) sqrt(mean((x[,-1]-x[,1])^2)))))` \unit{Hz} root mean square deviation between the couplings produced by the two equations.
+
+## Chi angle distribution analysis
+
+```{r, echo = FALSE, label = "readdunbrack"}
+dunbrack_dataset_path <- "DatasetForBBDepRL2010.txt"
+
+if (! "dunbrack_dataset" %in% ls()) {
+	dunbrack_dataset <- read.table(dunbrack_dataset_path, na.strings = "N./A.")
+	colnames(dunbrack_dataset) <- strsplit(sub("^# +", "", tail(readLines(dunbrack_dataset_path, n = 91), 1)), "\t")[[1]]
+}
+```
+
+During self-consistent parameterization of the side chain Karplus parameters [@Perez:2001aa], two different models of motion were previously used. Model $\mathrm{M}_1$ involved normally distributed fluctuation about a mean $\chi 1$ angle with standard deviation $\sigma_{\chi 1}$. Model $\mathrm{M}_2$ assumed jumps between 60°, 180°, and 300° and varied the respective populations. Each model had two free parameters and $\mathrm{M}_1$ was used for determining the final published parameters.
+
+Here, we also apply a third model (which we call $\mathrm{M}_3$) involving jumps between three rotameric bins whose chi angle distributions were taken from the 2010 Dunbrack rotamer library. [@Shapovalov:2011aa] The $\mathrm{M}_3$ model used `r formatC(sum(!dunbrack_dataset[,"RES"] %in% c("CPR","CYD","CYS","CPR")), big.mark=",")` different side chain conformations from their dataset. For each side chain conformation, the theoretical coupling value was calculated using Equation \ref{eq:karplusperez} and the data from Table \ref{tab:chidataperez}. Depending on the application, these theoretical couplings were averaged over all rotamers (as done for Figure \ref{fig:chicouplings}) or the three different rotameric bins associated with chi 1 (as done for Figure \ref{fig:aarmseperez}).
+
+# Results and Discussion
+
+## Fitting amino acid 1D spectra
+
+```{r, label = "readspectra", echo = FALSE}
+spec_list <- lapply(file.path(fit_dirs, "test.ft1"), fitnmr::read_nmrpipe)
+names(spec_list) <- names(fit_dirs)
+
+omega0_plus <- 0.02
+fit_input_list <- lapply(seq_along(fit_dirs), function(i) {
+  param_list <- fitnmr::tables_to_param_list(spec_list[i], tables_list[[i]])
+  do.call(fitnmr::make_fit_input, c(list(spec_list[i], omega0_plus=omega0_plus), fitnmr::param_list_to_arg_list(param_list)))
+})
+names(fit_input_list) <- names(fit_dirs)
+
+cols <- c(
+	HA="#61D04F",
+	"HA2/3"="#61D04F",
+	
+	HB="#2297E6",
+	HB2="#2297E6",
+	
+	HB3="#28E2E5",
+	
+	HG1="gray62",
+	HG12="gray62",
+	HG="gray62",
+	
+	HG2="#CD0BBC",
+	"HG2/3"="#CD0BBC",
+	
+	HG3="#F5C710",
+	HG13="#F5C710",
+	
+	HD1="pink",
+	
+	"HD1/2"="brown",
+	"HD2/3"="brown",
+	HD2="brown",
+	
+	HD3="pink",
+	
+	HE="purple",
+	HE1="purple",
+	"HE1/2"="purple",
+	"HE2/3"="purple",
+	HE3="purple",
+	
+	HH2="#CD0BBC",
+	
+	HZ="gray62",
+	HZ2="gray62",
+	
+	HZ3="#F5C710"
+)
+```
+
+```{r, fig.dim = c(3+8.3+6,5)/2.54, dev.args = list(pointsize = 8), echo = FALSE, label = "fig1:ilefit", fig.cap = "\\label{fig:ilefit}**A)** Representative structure of isoleucine taken from the CCD with the termini made zwitterionic in PyMOL. Protons are grouped by color, with each color having a distinct chemical shift modeled by a single resonance in the fit. The \\chem{NH_3^+} hydrogens (white) are deuterated due to exchange with \\chem{D_2O}. **B)** Fit of 500 MHz \\chem{\\phantom{}^1H} NMR spectrum of isoleucine in \\chem{D_2O} as described by Tables \\ref{tab:ileresonances}-\\ref{tab:ilecouplings}. The experimental spectrum is shown in black and the modeled signal corresponding to each resonance is shown with the same color as in **A**. Each scalar coupling is represented by a horizontal line above the spectrum, with the colors matched to the group being coupled to. The outermost multiplet produced by each coupling is represented by vertical dashes. The x-axis gives the \\chem{\\phantom{}^1H} chemical shift in \\unit{ppm} using a sparse representation. This panel was produced with the `plot_sparse_1d` FitNMR function."}
+layout(matrix(1:2, nrow=1), c(3,8.3))
+ile <- png::readPNG("aa_images/ile.png")
+par(mar=c(0,0,0,0))
+plot(1, 1, type="n", xlim=c(0,nrow(ile)), ylim=c(0,ncol(ile)), xaxs="i", yaxs="i", xlab=NA, ylab=NA, axes=FALSE, asp=1)
+rasterImage(ile, 0, 0, nrow(ile), ncol(ile))
+figure_letter("A")
+par(mar=c(2.7,1,0,0.5), mgp=c(1.7, 0.6, 0))
+fitnmr::plot_sparse_1d(fit_input_list[["ile"]], tables_list[["ile"]], col_resonance=cols, coupling_spacing=0.02)
+figure_letter("B")
+```
+
+To gain insight into coupling patterns between carbon-bound protons in amino acid side chains, we performed fits of spectra taken from the Biological Magnetic Resonance Databank (BMRB) [@Hoch:2023aa]. (Table \ref{tab:aadata}) The samples contained individual amino acids dissolved in \chem{D_2O}, nearly eliminating peaks from solvent and exchangeable protons. A representative fit for isoleucine is shown in Figure \ref{fig:ilefit}. The resonances are defined as shown in Table \ref{tab:ileresonances} and parameters derived from the fit are shown in Tables \ref{tab:ileresonances}-\ref{tab:ilecouplings}. The HA, HG2, and HD1 resonances are each affected by only one or two $\phantom{}^3J$ couplings, making their relatively simple multiplet patterns easy to resolve. The HG12 and HG13 resonances add a mutual $\phantom{}^2J$ coupling and a $\phantom{}^3J$ coupling to the HB atom. The HG12/HG13 chemical shift difference of `r formatC(diff(tables_list[["ile"]][["nuclei"]][c("HG13","HG12"),"omega0_ppm"])*spec_list[["ile"]][["fheader"]]["OBS",], 1, format = "f")` \unit{Hz} (relative to the `r formatC(tables_list[["ile"]][["couplings"]]["HG12-HG13",], 1, format = "f")` Hz $\phantom{}^2J$ coupling) is sufficient to minimize roofing effects from strong coupling in the experimental data (black), which shows minimal deviation from the modeled contribution of each resonance (gray and yellow, respectively). Despite a very complicated multiplet pattern for the HB atom (a doublet of doublets of doublets of quartets, blue), the resonance is very well fit by the model due to the couplings being shared with resonances having much less complexity.
+
+```{r echo = FALSE}
+plot_idx <- match(res_order, names(fit_dirs))
+
+map_list <- lapply(fit_input_list, function(fit_input) fitnmr::make_map(fitnmr::get_spec_int(fit_input, "input")[[1]]))
+names(map_list) <- names(fit_dirs)
+
+plot_spacing_ppm <- 0.075
+
+total_widths_ppm <- sapply(map_list, function(x) diff(range(x[,2])))
+max_width_ppm <- 1.39
+
+plot_idx_list <- list(integer())
+list_idx <- 1
+
+for (i in plot_idx) {
+
+	if (sum(total_widths_ppm[plot_idx_list[[list_idx]]]) + (length(plot_idx_list[[list_idx]])+1)*plot_spacing_ppm + total_widths_ppm[i] >= max_width_ppm) {
+		list_idx <- list_idx + 1
+	}
+	
+	if (list_idx > length(plot_idx_list)) {
+		plot_idx_list[list_idx] <- list(i)
+	} else {
+		plot_idx_list[[list_idx]] <- c(plot_idx_list[[list_idx]], i)
+	}
+}
+
+screen_left_right <- lapply(plot_idx_list, function(plot_idx) {
+
+	intra_plot_spacing <- plot_spacing_ppm
+	left <- plot_spacing_ppm*.6 + cumsum(c(0, total_widths_ppm[plot_idx[-length(plot_idx)]]+intra_plot_spacing))
+	right <- plot_spacing_ppm*.6 + cumsum(total_widths_ppm[plot_idx]+intra_plot_spacing)-intra_plot_spacing
+	
+	cbind(left, right)/max_width_ppm
+})
+
+screen_bottom <- rev(seq(0, 1, length.out=length(plot_idx_list)+1)[-(length(plot_idx_list)+1)])
+screen_top <- rev(seq(0, 1, length.out=length(plot_idx_list)+1)[-1])
+
+screen_left_right_top_bottom <- lapply(seq_along(screen_left_right), function(i) {
+	cbind(screen_left_right[[i]], bottom=screen_bottom[i], top=screen_top[i])
+})
+screen_left_right_top_bottom <- do.call(rbind, screen_left_right_top_bottom)
+
+titles <- sub("_.*", "", sub("bmse0+", "", fit_dirs))
+titles <- sub("[^/]+/([^/]+)/([^/]+)/([^/]+)", "\\1 \\2 MHz        ", titles)
+substr(titles, 1, 1) <- toupper(substr(titles, 1, 1))
+```
+
+```{r, fig.dim=c(17.8,19)/2.54, dev.args = list(pointsize = 8), echo = FALSE, label = "fig2:aafit", fig.cap = "\\label{fig:aafit}Fits of \\chem{\\phantom{}^1H} NMR spectra of all twenty canonical amino acids in \\chem{D_2O}. Spectra are plotted as described in Figure \\ref{fig:ilefit}. The total modeled sum of all resonance contributions is shown in red, which is usually obscured by the individual contributions."}
+screens <- split.screen(screen_left_right_top_bottom)
+screen_idx <- 1
+for (i in seq_along(plot_idx)) {
+	screen(screens[i])
+	par(mar=c(2.7,0,0,0), mgp=c(1.7, 0.6, 0))
+	fitnmr::plot_sparse_1d(fit_input_list[[plot_idx[i]]], tables_list[[plot_idx[i]]], lwd=0.5, coupling_spacing=0.03, col_resonance=cols)
+	title(ylab=titles[plot_idx[i]], xpd=NA, mgp=c(0.7, 0, 0), font.lab=2)
+}
+close.screen(all.screens=TRUE)
+```
+
+Fits for all twenty amino acids are shown in Figure \ref{fig:aafit}. Similar to isoleucine, the relatively simple spectra for glycine, alanine, valine, and threonine are all fit quite well and do not show significant strong coupling effects. The same is true of tryptophan, which has eight distinct resonances but only very slight strong coupling between HB2 and HB3.
+
+Strong coupling is more pronounced in the beta protons of serine, cysteine, asparagine, and aspartate. These four side chains have the same three protons in the spectra, with HB2 and HB3 showing significant roofing effects. However, the multiplet patterns are easily resolved and the weak coupling model used by FitNMR finds an intermediate intensity between the two doublets. Despite not modeling the roofing effect, the linewidths do not appear to be distorted by the intensity mismatch. Histidine is largely similar with the addition of HD2 and HE1 nuclei in the imidazole ring that are only coupled to one another via a `r formatC(tables_list[["his"]][["couplings"]]["HD2-HE1",], 1, format = "f")` \unit{Hz} $\phantom{}^4J$ coupling.
+
+Glutamine and glutamate add HG2 and HG3 nuclei, each with similar but distinct chemical shifts leading to large strong coupling effects. This results in outer multiplet peaks nearly disappearing. In proline, the HG2 and HG3 nuclei also have very similar chemical shifts and are quite strongly coupled. For methionine, the HG2 and HG3 nuclei appear to have indistinguishable chemical shifts and very similar scalar couplings, producing two overlapping, near-canonical triplets.
+
+Leucine, with one HG atom, has two terminal methyl groups, each represented by a single resonance (HD1 or HD2). These make the multiplet pattern for HG quite complex. Due to the very similar $\phantom{}^3J$(HG-HD1) and $\phantom{}^3J$(HG-HD2) coupling constants (`r formatC(tables_list[["leu"]][["couplings"]]["HG-HD1",], 1, format = "f")` and `r formatC(tables_list[["leu"]][["couplings"]]["HG-HD2",], 1, format = "f")` Hz, respectively), it is essentially a doublet of doublets of septets. Together with significant overlap between HB2, HB3, and HG (forming a strong coupling network between the three nuclei), this makes fitting the spectrum in this region very difficult. However, it is made somewhat easier because couplings involving the more isolated HA, HD1, and HD2 can be more easily resolved.
+
+Tyrosine and phenylalanine also have somewhat complicated coupling networks in their aromatic rings, with four and five strongly coupled nuclei, respectively. They should each theoretically have both $\phantom{}^3J$(HD1-HE1 or HD2-HE2) and  $\phantom{}^5J$(HD1-HE2 or HD2-HE1) couplings. In a purely weak coupling model neglecting couplings between equivalent nuclei, that would create a doublet of doublets for HD1/2 and HE1/2 in tyrosine. However, the experimental spectrum (black) resembles a doublet of triplets. The outer peaks in each triplet have much lower intensities than a classical 1:2:1 triplet and exhibit roofing. Accurate modeling of this requires separate quantum mechanical treatment of the spin states of HD1, HD2, HE1, and HE2. During fitting, $\phantom{}^5J$(HD-HE) drops to less than 0.0001 Hz, represented by the topmost vertical line. The phenylalanine fit does obtain reasonable values of `r formatC(tables_list[["phe"]][["couplings"]]["HD1/2-HE1/2-5",], 1, format = "f")` and `r formatC(tables_list[["phe"]][["couplings"]]["HD1/2-HZ",], 1, format = "f")` Hz for $\phantom{}^5J$(HD-HE) and $\phantom{}^4J$(HD-HZ), respectively. However, triplet behavior is still observed in the experimental spectrum, particularly for HE1/2, and remains unexplained by the weak coupling model.
+
+Lysine, arginine, and proline are all capable of having distinct proton chemicals shifts at the beta, gamma, and delta positions. Distinct chemical shifts are observed for all such protons except for the HD2 and HD3 atoms in arginine. They show identical chemical shifts and produce a near perfect triplet, suggesting that the scalar couplings they make with HG2 and HG3 rotationally average out to near-identical values. The values of those scalar couplings and rotational averaging will be discussed in more detail below. While nearly all resonances in proline are modeled well, lysine and arginine are more difficult, especially for the HG2 and HG3 atoms, each of which are coupled to five nuclei.
+
+Our data show that the large majority of protons in amino acid side chains can be modeled well using the FitNMR weak coupling approximation. However, peak overlap is an issue for several nuclei, suggesting 2D proton spectra like a NOESY or DQF-COSY may be required for adequate resolution. In addition, FitNMR and similar methods would benefit from incorporation of quantum mechanical calculations to enable accounting for strong coupling in the spectra.
+
+
+## Chi angle-dependent side chain scalar couplings
+
+Karplus parameters are required to derive structural information from scalar couplings. For $\phantom{}^3J$ couplings between adjacent \chem{CH_2} groups, the four proton-proton couplings completely sample all three values of $\Delta \chi$ (see chi 2-4 parameters in Tables \ref{tab:chidatahaasnoot} and \ref{tab:chidataperez}), providing detailed structural information. To use the generalized Karplus equation, we calculated the required electronegativity differences and positions of all substituent groups. (Table \ref{tab:chidatahaasnoot}) For the self-consistent Karplus equation, we extrapolated parameters derived from scalar couplings associated with chi 1 [@Perez:2001aa] to chi 2-4. (Table \ref{tab:chidataperez}) We did not attempt a reparameterization of $C_0$ and $\Delta C_{0,\mathrm{N}}$ (see Methods section \ref{methodskarplus}) to account for the absence of a nitrogen substitution at chi 2 (in leucine, isoleucine, methionine, glutamine, glutamate, lysine, arginine, and proline) or chi 3 (in lysine).
+
+```{r echo = FALSE}
+exp_couplings <- structure(lapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  chis <- unique(chi_h_couplings[chi_h_couplings[,"aa"] == aa,"chi"])
+  lapply(chis, function(chi) {
+    idx <- chi_h_couplings[,"aa"] == aa & chi_h_couplings[,"chi"] == chi
+    coupling_names <- paste(chi_h_couplings[idx,"h1"], chi_h_couplings[idx,"h2"], sep="-")
+    couplings <- tables_list[[aa]][["couplings"]][coupling_names,"hz"]
+    if (any(is.na(couplings))) {
+      coupling_names <- unique(substr(coupling_names, 1, nchar(coupling_names)-1))
+      couplings <- tables_list[[aa]][["couplings"]][coupling_names,"hz"]
+    }
+    names(couplings) <- coupling_names
+    couplings
+  })
+}), .Names = unique(chi_h_couplings[,"aa"]))
+```
+
+```{r echo = FALSE}
+dun_couplings_haasnoot <- structure(lapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  chis <- unique(chi_h_couplings[chi_h_couplings[,"aa"] == aa,"chi"])
+  aatype <- toupper(aa)
+  if (aatype == "CYS") {
+    aatype <- "CYH"
+  }
+  dun_idx <- which(dunbrack_dataset[,"RES"] == aatype)
+  lapply(chis, function(chi) {
+    idx <- which(chi_h_couplings[,"aa"] == aa & chi_h_couplings[,"chi"] == chi)
+    couplings <- sapply(idx, function(i) {
+      mean(coupling_haasnoot(dunbrack_dataset[dun_idx,8+chi], chi_h_couplings[i,"delta"], chi_h_delta_en[i,]))
+    })
+    names(couplings) <- paste(chi_h_couplings[idx,"h1"], chi_h_couplings[idx,"h2"], sep="-")
+    couplings
+  })
+}), .Names = unique(chi_h_couplings[,"aa"]))
+
+c0 <- c0_hh(chi_h_couplings[,c("c","n","o","s")])
+dun_couplings_perez <- structure(lapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  chis <- unique(chi_h_couplings[chi_h_couplings[,"aa"] == aa,"chi"])
+  aatype <- toupper(aa)
+  if (aatype == "CYS") {
+    aatype <- "CYH"
+  }
+  dun_idx <- which(dunbrack_dataset[,"RES"] == aatype)
+  lapply(chis, function(chi) {
+    idx <- which(chi_h_couplings[,"aa"] == aa & chi_h_couplings[,"chi"] == chi)
+    couplings <- sapply(idx, function(i) {
+      mean(coupling_hh(dunbrack_dataset[dun_idx,8+chi]*pi/180, chi_h_couplings[i,"delta"]*pi/180, c0[i]))
+    })
+    names(couplings) <- paste(chi_h_couplings[idx,"h1"], chi_h_couplings[idx,"h2"], sep="-")
+    couplings
+  })
+}), .Names = unique(chi_h_couplings[,"aa"]))
+
+bundi_couplings <- list(
+	ala=c("HA-HB"=7.0),
+	val=c("HA-HB"=6.9, "HB-HG"=6.9),
+	ile=c("HA-HB"=7.6, "HB-HG12"=9.5, "HB-HG13"=3.5, "HB-HG2"=6.9, "HG-HD1"=7.0),
+	leu=c("HA-HB2"=7.2, "HA-HB3"=7.2, "HG-HD1/2"=6.3),
+	ser=c("HA-HB2"=5.1, "HA-HB3"=5.1),
+	thr=c("HA-HB"=5.0, "HB-HG2"=6.3),
+	asp=c("HA-HB2"=5.7, "HA-HB3"=8.3, "HB2-HB3"=16.3),
+	glu=c("HA-HB2"=4.6, "HA-HB3"=9.5, "HB2-HB3"=14.7, "HB-HG"=7.3, "HG2-HG3"=14.6),
+	lys=c("HA-HB2"=5.6, "HA-HB3"=7.8, "HB2-HB3"=14.0),
+	arg=c("HA-HB2"=5.5, "HA-HB3"=7.6, "HB2-HB3"=16.0),
+	asn=c("HA-HB2"=5.8, "HA-HB3"=8.3, "HB2-HB3"=16.0),
+	gln=c("HA-HB2"=5.0, "HA-HB3"=8.8, "HB2-HB3"=15.0, "HB-HG"=7.5),
+	met=c("HA-HB2"=5.7, "HA-HB3"=8.6),
+	cys=c("HA-HB2"=4.0, "HA-HB3"=9.6, "HB2-HB3"=13.9),
+	trp=c("HA-HB2"=6.0, "HA-HB3"=7.8, "HB2-HB3"=14.5),
+	phe=c("HA-HB2"=5.6, "HA-HB3"=10.3, "HB2-HB3"=14.0),
+	tyr=c("HA-HB2"=5.6, "HA-HB3"=9.0, "HB2-HB3"=14.0),
+	his=c("HA-HB2"=6.0, "HA-HB3"=6.9, "HB2-HB3"=15.4),
+	pro=c("HA-HB2"=8.8, "HA-HB3"=5.0, "HB2-HB3"=15.0)
+)
+```
+
+```{r, fig.dim = c(8.3+2,7.5)/2.54, dev.args = list(pointsize = 8), echo = FALSE, label = "fig3:karpluscouplings", fig.cap = "\\label{fig:chicouplings}Side chain \\chem{{}^1H-{}^1H} \\chem{{}^3J} scalar couplings that depend on chi angles through the Karplus relationship. Couplings from fits of the 1D NMR spectra are shown with circles. Theoretical couplings calculated from the dataset used to create the 2010 Dunbrack rotamer library are shown with an x (using generalized Karplus equation) or a plus sign (using self-consistent equation). Experimental couplings from GGXA tetrapeptides [@Bundi:1979aa] are shown with triangles. HA-HB couplings are shown in green, HB-HG couplings are shown in blue, HG-HD couplings are shown in yellow, and HD-HE couplings are shown in auburn. The dihedral angles governing \\chem{{}^3J}(HB2-HG2) and \\chem{{}^3J}(HB3-HG3) have the same $\\Delta \\chi$ (see Methods and Tables \\ref{tab:chidatahaasnoot}/\\ref{tab:chidataperez}) and therefore have the same value theoretical value shown with a thick x or plus sign. The same is true for the corresponding HG-HD and HD-HE couplings. Experimental couplings between speculatively assigned atoms 2-2 and 3-3 of adjacent methylene groups are shaded gray. Depending on the actual assignments, either the shaded or unshaded pair of experimental couplings should correspond to the theoretical couplings indicated with the thick symbols."}
+xlim <- c(0.5,length(exp_couplings)+0.5)
+ylim <- range(unlist(exp_couplings), unlist(dun_couplings_haasnoot), unlist(dun_couplings_perez))
+ylim[1] <- ylim[1]-1.3
+ylim[2] <- ylim[2]+0.5
+aa_names <- names(exp_couplings)
+substr(aa_names, 1, 1) <- toupper(aa_names)
+chi_cols <- cols[c("HA", "HB2", "HG3", "HD2")]
+par(mar=c(3.3,2.7,0.5,0.5), mgp=c(1.4, 0.6, 0))
+plot(1, 1, type = "n", bty="o", xlim=xlim, ylim=ylim, xaxs="i", xaxt="n", xlab=NA, ylab=expression(phantom()^1*H*"-"*phantom()^1*H ~ phantom()^3*J ~ (Hz)))
+axis(1, seq_along(exp_couplings), aa_names, las=2, mgp=c(1.7, 0.8, 0))
+coupling_re <- c("HA.*-HB.*", "HB.*-HG.*", "HG.*-HD.*")
+for (i in seq_along(exp_couplings)) {
+  x <- seq(1, length.out=length(exp_couplings[[i]]), by=c(1, 0.4, 0.3, 0.24)[length(exp_couplings[[i]])])
+  x <- x - mean(x) + i
+  aa <- names(exp_couplings)[i]
+  for (j in seq_along(exp_couplings[[i]])) {
+    num1 <- substr(names(exp_couplings[[i]][[j]]), 3, 3)
+    num2 <- substr(names(exp_couplings[[i]][[j]]), 7, 7)
+    bg <- ifelse((num1 == "2" & num2 == "2") | (num1 == "3" & num2 == "3"), gray(0, 0.333), NA)
+    points(rep(x[j], length(exp_couplings[[i]][[j]])), exp_couplings[[i]][[j]], col=chi_cols[j], cex=0.7, lwd=0.75, pch=21, bg=bg)
+    num1 <- substr(names(dun_couplings_perez[[i]][[j]]), 3, 3)
+    num2 <- substr(names(dun_couplings_perez[[i]][[j]]), 7, 7)
+    lwd <- ifelse((num1 == "2" & num2 == "2") | (num1 == "3" & num2 == "3"), 1.5, 0.75)
+    points(rep(x[j], length(dun_couplings_perez[[i]][[j]])), dun_couplings_haasnoot[[i]][[j]], col=chi_cols[j], cex=0.6, lwd=lwd, pch=4)
+    points(rep(x[j], length(dun_couplings_perez[[i]][[j]])), dun_couplings_perez[[i]][[j]], col=chi_cols[j], cex=0.5, lwd=lwd, pch=3)
+  	idx <- grep(coupling_re[j], names(bundi_couplings[[aa]]))
+  	points(rep(x[j], length(idx)), bundi_couplings[[aa]][idx], col=chi_cols[j], cex=0.6, lwd=0.75, pch=2)
+  }
+}
+abline(v=seq(0.5,17.5), lwd=0.1)
+legend("topleft", legend=c("HA-HB", "HB-HG", "HG-HD", "HD-HE"), pt.cex=1, pt.lwd=0.75, pch=16, bg="white", col=chi_cols, horiz=TRUE)
+legend("bottomright", legend=c("1D FitNMR", "Generalized", "Self-consistent", "Bundi et al."), pt.cex=c(0.7, 0.6, 0.5, 0.6), pt.lwd=0.75, pch=c(1,4,3,2), bg="white")
+```
+
+The fit-derived $\phantom{}^3J$ couplings dependent on a side chain chi angle are shown as circles in Figure \ref{fig:chicouplings}. There are eight amino acids with chi 2-related couplings (blue), three amino acids with chi 3-related couplings (yellow), and one with chi 4-related couplings (auburn). For chi angles with \chem{CH_2} groups on both sides of the associated rotatable bond, there are two couplings that in principle should take the same value due to having the same $\Delta \chi$ offset (see Methods and Tables \ref{tab:chidatahaasnoot}/\ref{tab:chidataperez}, and Figure \ref{fig:equationcomp}H/I for possible exceptions). These scalar couplings were obtained without any constraint on their similarity in the software nor human knowledge of the expected equivalence during manual optimization of the input parameters. Despite that and the lack of stereospecific assignments, such equivalent couplings were within about 1 \unit{Hz} of each other in all but one case (lysine HG-HD), supporting the relative accuracy of our approach despite the limitations.
+
+As an initial point of comparison, we used the 2010 Dunbrak rotamer library dataset to calculate theoretical scalar couplings assuming the same chi angle distributions observed in crystal structures. In Figure \ref{fig:chicouplings}, these are shown using either an x (calculated using generalized equation \ref{eq:karplushaasnoot}) or a plus sign (calculated with self-consistent equation \ref{eq:karplusperez}). For the calculated rotamer library couplings, thick symbols represent the two scalar couplings with equivalent $\Delta \chi$ offsets. If our speculative stereospecific assignments for both methylene protons are either both correct or both incorrect, this pair of geometrically equivalent experimental coupling values are shown as shaded circles. Alternatively, if only one of the methylene assignments is incorrect, then the unshaded circles should be equivalent. For these geometrically equivalent couplings, the experimental and rotamer library couplings are generally within about 1.5 Hz of each other. As noted above, there are possible exceptions to the coupling equivalence that happen due to geometric relationships between electron withdrawing groups and the coupled protons [@Haasnoot:1980aa], which is accounted for by the generalized Karplus equation. However, the only angle where this is observable in our simulated couplings is at proline chi 3 (see the two distinct thick yellow x symbols for proline in Figure \ref{fig:chicouplings} and phase shifted solid lines in Figure \ref{fig:equationcomp}I).
+
+Beta-branched amino acids have just a single coupling associated with chi 1, allowing unambiguous comparison. Of these, the experimental and rotamer library couplings are very similar for threonine. However, the couplings for valine and isoleucine are quite different, suggesting some combination of the charged termini, absence of neighboring amino acid residues, or solvent exposure alters the free energy of these hydrophobic residues when free in solution. For valine and isoleucine, GGXA tetrapeptide couplings [@Bundi:1979aa] are closer to the rotamer library-derived couplings than the free amino acid couplings. For other resides, notably cysteine, glutamate, tyrosine, and phenylalanine, one of the tetrapeptide couplings is much higher than any of the free amino acid or rotamer couplings.
+
+```{r echo=FALSE}
+exp_hahb_diff <- sapply(lapply(exp_couplings, `[[`, 1)[-c(1,3,5)], diff)
+dun_hahb_diff_haasnoot <- sapply(lapply(dun_couplings_haasnoot, `[[`, 1)[-c(1,3,5)], diff)
+dun_hahb_diff_perez <- sapply(lapply(dun_couplings_perez, `[[`, 1)[-c(1,3,5)], diff)
+exp_greater_count_haasnoot <- sum(abs(exp_hahb_diff) > abs(dun_hahb_diff_haasnoot))
+dun_greater_count_haasnoot <- sum(abs(exp_hahb_diff) < abs(dun_hahb_diff_haasnoot))
+exp_greater_count_perez <- sum(abs(exp_hahb_diff) > abs(dun_hahb_diff_perez))
+dun_greater_count_perez <- sum(abs(exp_hahb_diff) < abs(dun_hahb_diff_perez))
+diff_chisq_test_haasnoot <- chisq.test(c(exp_greater_count_haasnoot, dun_greater_count_haasnoot), p=c(0.5, 0.5))
+diff_chisq_test_perez <- chisq.test(c(exp_greater_count_perez, dun_greater_count_perez), p=c(0.5, 0.5))
+```
+
+Many of the experimentally measured scalar couplings with ambiguous assignments have rotamer library values somewhat nearby, providing less support for (but not necessarily excluding) differences in the energetic preferences. One possible systematic divergence between the experimental and rotamer-derived couplings was in the absolute difference between the two HA-HB couplings, $\Delta ^3\mathrm{J}\text{(HA-HB)} = | \phantom{}^3\mathrm{J}\text{(HA-HB2)}-\phantom{}^3\mathrm{J}\text{(HA-HB3)}|$, which is especially pronounced for aspartate. However, with the experimental $\Delta ^3\mathrm{J}\text{(HA-HB)}$ value being greater than the rotamer library value (calculated using self-consistent equation \ref{eq:karplusperez}) for `r exp_greater_count_perez` out of `r exp_greater_count_perez+dun_greater_count_perez` residues, the difference was not statistically significant (p = `r formatC(diff_chisq_test_perez$p.value, 2, format="f")`). Likewise, using generalized Karplus equation \ref{eq:karplushaasnoot} to calculate rotamer library values, only `r exp_greater_count_haasnoot` out of `r exp_greater_count_haasnoot+dun_greater_count_haasnoot` residues showed a larger experimental coupling range (p = `r formatC(diff_chisq_test_haasnoot$p.value, 2, format="f")`).
+
+## Analysis of chi 1 angle distributions
+
+```{r echo=FALSE}
+if (FALSE) {
+theta <- seq(0, 360, by=1)
+fourier_3j <- 6.01 - 1.37*cos(theta/180*pi) + 3.61*cos(2*theta/180*pi)
+power_3j <- 7.23*cos(theta/180*pi)^2 - 1.37*cos(theta/180*pi) + 2.40
+plot(theta, fourier_3j, type="l", xaxt="n")
+points(theta, power_3j, type="l", col="red")
+points(theta, coupling_hh(theta/180*pi, 0, c0_hh(2, 1, 0, 0)), type="l", col="blue")
+axis(1, seq(0, 360, by=30))
+}
+```
+
+```{r echo=FALSE}
+coupling_haasnoot_m1 <- function(chi1, chi1_sigma, delta_chi, delta_en, dx=seq(-5, 5, by=0.1), pdx=dnorm(dx)/sum(dnorm(dx))) {
+
+	stopifnot(length(chi1) == length(chi1_sigma))
+	stopifnot(length(delta_chi) == 1)
+	
+	sapply(seq_along(chi1), function(i) {
+		sum(coupling_haasnoot(chi1[i]+chi1_sigma[i]*dx, delta_chi, delta_en)*pdx)
+	})
+}
+
+coupling_hh_m1 <- function(chi1, chi1_sigma, delta_chi, c0, c1=-1.37, c2=3.61, dx=seq(-5, 5, by=0.1), pdx=dnorm(dx)/sum(dnorm(dx))) {
+
+	stopifnot(length(chi1) == length(chi1_sigma))
+	stopifnot(length(delta_chi) == 1)
+	
+	sapply(seq_along(chi1), function(i) {
+		sum(coupling_hh(chi1[i]+chi1_sigma[i]*dx, delta_chi, c0=c0, c1=c1, c2=c2)*pdx)
+	})
+}
+
+coupling_haasnoot_m23 <- function(p300, p180, delta_chi, delta_en, couplings=coupling_haasnoot(c(60, 180, 300), delta_chi, delta_en)) {
+
+	stopifnot(length(p300) == length(p180))
+	stopifnot(length(delta_chi) == 1)
+	
+	chi <- c(60, 180, 300)*pi/180
+	pmat <- rbind(1-p180-p300, p180, p300)
+	
+	weighted_mat <- couplings*pmat
+	# handle NaN couplings correctly
+	weighted_mat[pmat == 0] <- 0
+	
+	sc <- colSums(weighted_mat)
+	sc[p300+p180 > 1] <- NA
+	sc
+}
+
+coupling_hh_m23 <- function(p300, p180, delta_chi, c0, c1=-1.37, c2=3.61, couplings=coupling_hh(c(60, 180, 300)*pi/180, delta_chi, c0=c0, c1=c1, c2=c2)) {
+
+	stopifnot(length(p300) == length(p180))
+	stopifnot(length(delta_chi) == 1)
+	
+	chi <- c(60, 180, 300)*pi/180
+	pmat <- rbind(1-p180-p300, p180, p300)
+	
+	weighted_mat <- couplings*pmat
+	# handle NaN couplings correctly
+	weighted_mat[pmat == 0] <- 0
+	
+	sc <- colSums(weighted_mat)
+	sc[p300+p180 > 1] <- NA
+	sc
+}
+
+rot_couplings_haasnoot_m3 <- structure(lapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  chis <- unique(chi_h_couplings[chi_h_couplings[,"aa"] == aa,"chi"])
+  aatype <- toupper(aa)
+  if (aatype == "CYS") {
+    aatype <- "CYH"
+  }
+  dun_idx <- dunbrack_dataset[,"RES"] == aatype
+  lapply(chis, function(chi) {
+    idx <- which(chi_h_couplings[,"aa"] == aa & chi_h_couplings[,"chi"] == chi)
+    couplings <- sapply(idx, function(i) {
+      chi <- dunbrack_dataset[dun_idx,8+chi] %% 360
+      sapply(c(60,180,300), function(chi_center) {
+        chi <- chi[chi > chi_center-60 & chi < chi_center+60]
+        mean(coupling_haasnoot(chi, chi_h_couplings[i,"delta"], chi_h_delta_en[i,]))
+      })
+    })
+    colnames(couplings) <- paste(chi_h_couplings[idx,"h1"], chi_h_couplings[idx,"h2"], sep="-")
+    couplings
+  })
+}), .Names = unique(chi_h_couplings[,"aa"]))
+
+rot_couplings_m3 <- structure(lapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  chis <- unique(chi_h_couplings[chi_h_couplings[,"aa"] == aa,"chi"])
+  aatype <- toupper(aa)
+  if (aatype == "CYS") {
+    aatype <- "CYH"
+  }
+  dun_idx <- dunbrack_dataset[,"RES"] == aatype
+  lapply(chis, function(chi) {
+    idx <- which(chi_h_couplings[,"aa"] == aa & chi_h_couplings[,"chi"] == chi)
+    couplings <- sapply(idx, function(i) {
+      chi <- dunbrack_dataset[dun_idx,8+chi] %% 360
+      sapply(c(60,180,300), function(chi_center) {
+        chi <- chi[chi > chi_center-60 & chi < chi_center+60]
+        mean(coupling_hh(chi*pi/180, chi_h_couplings[i,"delta"]*pi/180, c0[i]))
+      })
+    })
+    colnames(couplings) <- paste(chi_h_couplings[idx,"h1"], chi_h_couplings[idx,"h2"], sep="-")
+    couplings
+  })
+}), .Names = unique(chi_h_couplings[,"aa"]))
+
+chi1_pop <-  structure(sapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  aatype <- toupper(aa)
+  if (aatype == "CYS") {
+    aatype <- "CYH"
+  }
+  dun_idx <- dunbrack_dataset[,"RES"] == aatype
+  chi <- dunbrack_dataset[dun_idx,8+1] %% 360
+  sapply(c(60,180,300), function(chi_center) {
+    mean(chi > chi_center-60 & chi < chi_center+60)
+  })
+}), .Dimnames = list(NULL, unique(chi_h_couplings[,"aa"])))
+
+chi1_dist <- simplify2array(structure(lapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  aatype <- toupper(aa)
+  if (aatype == "CYS") {
+    aatype <- "CYH"
+  }
+  dun_idx <- dunbrack_dataset[,"RES"] == aatype
+  chi <- dunbrack_dataset[dun_idx,8+1] %% 360
+  sapply(c(60,180,300), function(chi_center) {
+    chi <- chi[chi > chi_center-60 & chi < chi_center+60]
+    if (length(chi)) {
+      density(chi, bw=2, from=0, to=360)$y
+    } else {
+      rep(NaN, 512)
+    }
+  })
+}), .Names = unique(chi_h_couplings[,"aa"])))
+```
+
+```{r echo=FALSE}
+chi1 <- seq(0, 360, by=1)*pi/180
+chi1_sigma <- seq(0, 50, by=1)*pi/180
+
+haasnoot_m1_rmse_list <- structure(lapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  
+  idx <- which(chi_h_couplings[,"aa"] == aa & chi_h_couplings[,"chi"] == 1)
+  coupling_array <- aperm(simplify2array(lapply(idx, function(i) {
+    outer(chi1*180/pi, chi1_sigma*180/pi, coupling_haasnoot_m1, chi_h_couplings[i,"delta"], chi_h_delta_en[i,])
+  })), c(3,1,2))
+  
+  rmse_1 <- sqrt(colMeans((coupling_array-exp_couplings[[aa]][[1]])^2))
+  rmse_2 <- sqrt(colMeans((coupling_array-rev(exp_couplings[[aa]][[1]]))^2))
+  
+  list(rmse=pmin(rmse_1, rmse_2), split=rmse_1-rmse_2)
+  
+}), .Names = unique(chi_h_couplings[,"aa"]))
+
+m1_rmse_list <- structure(lapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  
+  idx <- which(chi_h_couplings[,"aa"] == aa & chi_h_couplings[,"chi"] == 1)
+  coupling_array <- aperm(simplify2array(lapply(idx, function(i) {
+    outer(chi1, chi1_sigma, coupling_hh_m1, chi_h_couplings[i,"delta"]*pi/180, c0[i])
+  })), c(3,1,2))
+  
+  rmse_1 <- sqrt(colMeans((coupling_array-exp_couplings[[aa]][[1]])^2))
+  rmse_2 <- sqrt(colMeans((coupling_array-rev(exp_couplings[[aa]][[1]]))^2))
+  
+  list(rmse=pmin(rmse_1, rmse_2), split=rmse_1-rmse_2)
+  
+}), .Names = unique(chi_h_couplings[,"aa"]))
+
+p300 <- seq(0,1,by=0.01)
+p180 <- p300
+
+m2_rmse_list <- structure(lapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  
+  idx <- which(chi_h_couplings[,"aa"] == aa & chi_h_couplings[,"chi"] == 1)
+  coupling_array <- aperm(simplify2array(lapply(idx, function(i) {
+    outer(p300, p180, coupling_hh_m23, chi_h_couplings[i,"delta"]*pi/180, c0[i])
+  })), c(3,1,2))
+  
+  rmse_1 <- sqrt(colMeans((coupling_array-exp_couplings[[aa]][[1]])^2))
+  rmse_2 <- sqrt(colMeans((coupling_array-rev(exp_couplings[[aa]][[1]]))^2))
+  
+  list(rmse=pmin(rmse_1, rmse_2), split=rmse_1-rmse_2)
+  
+}), .Names = unique(chi_h_couplings[,"aa"]))
+
+haasnoot_m3_rmse_list <- structure(lapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  
+  idx <- which(chi_h_couplings[,"aa"] == aa & chi_h_couplings[,"chi"] == 1)
+  coupling_array <- aperm(simplify2array(lapply(idx, function(i) {
+    coupling_name <- paste(chi_h_couplings[i,"h1"], chi_h_couplings[i,"h2"], sep="-")
+    outer(p300, p180, coupling_haasnoot_m23, chi_h_couplings[i,"delta"], couplings=rot_couplings_haasnoot_m3[[aa]][[1]][,coupling_name])
+  })), c(3,1,2))
+  
+  rmse_1 <- sqrt(colMeans((coupling_array-exp_couplings[[aa]][[1]])^2))
+  rmse_2 <- sqrt(colMeans((coupling_array-rev(exp_couplings[[aa]][[1]]))^2))
+  
+  list(rmse=pmin(rmse_1, rmse_2), split=rmse_1-rmse_2)
+  
+}), .Names = unique(chi_h_couplings[,"aa"]))
+
+m3_rmse_list <- structure(lapply(unique(chi_h_couplings[,"aa"]), function(aa) {
+  
+  idx <- which(chi_h_couplings[,"aa"] == aa & chi_h_couplings[,"chi"] == 1)
+  coupling_array <- aperm(simplify2array(lapply(idx, function(i) {
+    coupling_name <- paste(chi_h_couplings[i,"h1"], chi_h_couplings[i,"h2"], sep="-")
+    outer(p300, p180, coupling_hh_m23, chi_h_couplings[i,"delta"]*pi/180, couplings=rot_couplings_m3[[aa]][[1]][,coupling_name])
+  })), c(3,1,2))
+  
+  rmse_1 <- sqrt(colMeans((coupling_array-exp_couplings[[aa]][[1]])^2))
+  rmse_2 <- sqrt(colMeans((coupling_array-rev(exp_couplings[[aa]][[1]]))^2))
+  
+  list(rmse=pmin(rmse_1, rmse_2), split=rmse_1-rmse_2)
+  
+}), .Names = unique(chi_h_couplings[,"aa"]))
+```
+
+```{r echo=FALSE}
+raster_on <- function(res=72, bg="transparent", filename=tempfile("raster", fileext=".png")) {
+
+	library(png)
+	
+	dev_target <- dev.cur()
+
+	pointsize <- par("ps")
+	pin <- par("pin")
+	usr <- par("usr")
+	xlog <- par("xlog")
+	ylog <- par("ylog")
+	width <- ceiling(pin[1]*res)
+	height <- ceiling(pin[2]*res)
+	
+	plot_coord <- c(mean(usr[1:2])+diff(usr[1:2])*width/(pin[1]*res)*c(-0.5, 0.5), mean(usr[3:4])+diff(usr[3:4])*height/(pin[2]*res)*c(-0.5, 0.5))
+	
+	width_mai <- max((width/res-pin[1])/2, 0)
+	height_mai <- max((height/res-pin[2])/2, 0)
+	
+	png(filename, width, height, pointsize=pointsize, bg=bg, res=res, type="cairo")
+	
+	dev_raster <- dev.cur()
+	
+	par(mai=c(height_mai, width_mai, height_mai, width_mai))
+	
+	plot.new()
+	
+	logpar <- ""
+	if (xlog) {
+		usr[1:2] <- 10^usr[1:2]
+		logpar <- paste(logpar, "x", sep="")
+	}
+	if (ylog) {
+		usr[3:4] <- 10^usr[3:4]
+		logpar <- paste(logpar, "y", sep="")
+	}
+	
+	plot.window(usr[1:2], usr[3:4], logpar, xaxs="i", yaxs="i")
+	
+	list(dev_target=dev_target, dev_raster=dev_raster, file_raster=filename, plot_coord=plot_coord)
+}
+
+raster_off <- function(raster_info, unlink_file=TRUE) {
+
+	dev.off(raster_info$dev_raster)
+
+	dev.set(raster_info$dev_target)
+	
+	raster_image <- readPNG(raster_info$file_raster, FALSE)
+	
+	if (unlink_file) {
+		unlink(raster_info$file_raster)
+	} else {
+		cat(sprintf("Not unlinking raster file: %s\n", raster_info$file_raster))
+	}
+	
+	usr <- usrlog <- par("usr")
+	xlog <- par("xlog")
+	ylog <- par("ylog")
+	logpar <- ""
+	
+	if (xlog) {
+		usr[1:2] <- 10^usr[1:2]
+		logpar <- paste(logpar, "x", sep="")
+	}
+	if (ylog) {
+		usr[3:4] <- 10^usr[3:4]
+		logpar <- paste(logpar, "y", sep="")
+	}
+	
+	if (xlog || ylog) {
+		par(xlog=FALSE, ylog=FALSE)
+		plot.window(usrlog[1:2], usrlog[3:4], "", xaxs="i", yaxs="i")
+	}
+	
+	rasterImage(raster_image, raster_info$plot_coord[1], raster_info$plot_coord[3], raster_info$plot_coord[2], raster_info$plot_coord[4])
+	
+	if (xlog || ylog) {
+		plot.window(usr[1:2], usr[3:4], logpar, xaxs="i", yaxs="i")
+	}
+}
+```
+
+```{r echo=FALSE}
+m1_dist <- simplify2array(lapply(chi1, function(mean) {
+  x <- ((seq(0, 2*pi, length.out=512) - mean + pi) %% (2*pi)) + mean - pi
+  sapply(chi1_sigma, function(sd) {
+    d <- dnorm(x, mean, ifelse(sd == 0, chi1_sigma[2]*1e-2, sd))
+    d/sum(d)
+  })
+}))
+```
+
+```{r echo=FALSE}
+dist_match <- simplify2array(structure(lapply(seq_len(dim(chi1_dist)[3]), function(aa) {
+  sapply(seq_len(dim(chi1_dist)[2]), function(bin) {
+    dun_dist <- chi1_dist[,bin,aa]/sum(chi1_dist[,bin,aa])
+    bhattacharyya_mat <- colSums(sqrt(m1_dist * dun_dist))
+    idx <- unname(which(bhattacharyya_mat == max(bhattacharyya_mat), arr.ind=TRUE))
+    if (length(idx) == 2) {
+      c(chi1[idx[2]], chi1_sigma[idx[1]])*180/pi
+    } else {
+      rep(NA_real_, 2)
+    }
+  })
+}), .Names=dimnames(chi1_dist)[[3]]))
+```
+
+```{r, fig.dim=c(17.8,18.5)/2.54, dev.args = list(pointsize = 8), echo = FALSE, label = "fig4:aarmsehaasnoot", fig.cap = "\\label{fig:aarmsehaasnoot}Generalized equation \\ref{eq:karplushaasnoot} \\chem{\\phantom{}^3J}(HA-HB) root mean squared error (RMSE) in \\unit{Hz} for $\\mathrm{M}_1$ (left) and $\\mathrm{M}_3$ (right) models of motion. Dashed lines separate regions with swapped assignments. Dunbrack rotamer library distributions are shown on top of the $\\mathrm{M}_1$ plots, with the $\\mathrm{M}_1$ model having the closest match to each shown with a blue plus sign. Rotamer library populations are shown as a blue point or solid vertical line in the $\\mathrm{M}_3$ plots."}
+zlim <- c(0,8)
+zlevels <- seq(0,8.5,by=0.5)
+zcol <- rev(heat.colors(length(zlevels)-1))
+
+mardist <- c(0,2.9,0.1,0.1)
+mar1 <- c(0.7,2.9,0,0.1)
+mar2 <- c(0.7,2.9,0,0.3)
+par(oma=c(2.1,0,0,0), mar=mar1)
+layout(matrix(matrix(seq_len(2*18), nrow=2), ncol=4, byrow=TRUE), widths=rep(c(2.2,1), 2), heights=rep(1,9))
+layout_mat <- matrix(seq_len(4*18), nrow=8)[c(1:2,5:6,3:4,7:8),]
+layout_mat <- matrix(layout_mat, ncol=4, byrow=TRUE)
+layout_mat[!is.na(layout_mat)] <- rank(layout_mat[!is.na(layout_mat)])
+layout(layout_mat, widths=rep(c(2.5,1), 2), heights=rep(c(0.2,1),9))
+
+aa_order <- unique(chi_h_couplings[,"aa"])
+
+#m23_rmse_list <- m2_rmse_list
+haasnoot_m23_rmse_list <- haasnoot_m3_rmse_list
+
+for (aa in aa_order) {
+
+  aa_label <- aa
+	substr(aa_label, 1, 1) <- toupper(substr(aa_label, 1, 1))
+  
+	par(mar = mardist, cex=1)
+	plot(1, 1, type="n", xlim=range(chi1)*180/pi, ylim=c(0,1.04), xaxs="i", yaxs="i", axes=FALSE, xlab=NA, ylab=NA)
+	for (i in 1:3) {
+	  y <- chi1_dist[,i,aa]/max(chi1_dist[,i,aa])
+	  y <- y*chi1_pop[i,aa]/max(chi1_pop[,aa])
+	  points(seq(0, 360, length.out=length(y)), y, type="l", col="blue")
+	}
+	
+	plot.new()
+	
+  par(mar = mar1, mgp = c(1.6, 0.6, 0), cex=1)
+	plot(1, 1, type="n", xlim=range(chi1)*180/pi, ylim=range(chi1_sigma)*180/pi, xaxs="i", yaxs="i", xaxt="n", xlab=NA, ylab=expression(sigma[chi[1]] ~ "(°)"), main=NA)
+	axis(1, seq(0,360,by=120),label=FALSE, tcl=-0.35)
+	axis(1, seq(60,300,by=120),label=FALSE, tcl=-0.5)
+	axis(1, seq(30,330,by=60),label=FALSE, tcl=-0.2)
+	if (aa %in% tail(aa_order, 2)) {
+		axis(1, seq(0,360,by=60),tick=FALSE)
+		title(xlab=expression(chi[1] ~ "(°)"), xpd=NA)
+	}
+	raster_info <- raster_on(300)
+	.filled.contour(chi1*180/pi, chi1_sigma*180/pi, haasnoot_m1_rmse_list[[aa]]$rmse, zlevels, zcol)
+	raster_off(raster_info)
+	points(t(dist_match[,,aa]), cex=0.75, pch=3, col="blue")
+	contour(chi1*180/pi, chi1_sigma*180/pi, haasnoot_m1_rmse_list[[aa]]$rmse, levels=zlevels, add=TRUE, lwd=0.5)
+	contour(chi1*180/pi, chi1_sigma*180/pi, haasnoot_m1_rmse_list[[aa]]$split, levels=c(-30,0,30), add=TRUE, lwd=0.5, drawlabels=FALSE, lty="dashed")
+	box()
+	
+	par(mar = mar2, mgp = c(1.6, 0.6, 0), cex=1)
+	if (any(is.nan(haasnoot_m23_rmse_list[[aa]]$rmse))) {
+	  plot(1, 1, type="n", xlim=range(p300), ylim=range(0, haasnoot_m23_rmse_list[[aa]]$rmse[,1]), xaxs="i", yaxs="i", xlab=NA, ylab=expression(phantom()^3*J ~ RMSE ~ "(Hz)"), xaxt="n", mgp=c(1.6, 0.6, 0), xpd=NA)
+	  abline(v=p300[which.min(abs(m3_rmse_list[["pro"]]$split[,1]))], lty="dashed", lwd=0.5)
+	  legend("topright", legend=paste0(aa_label, " "), box.col=NA, text.font=2, bg="white", x.intersp=0)
+	  points(p300, haasnoot_m23_rmse_list[[aa]]$rmse[,1], type="l")
+	  abline(v=t(chi1_pop)[aa,3], lwd=1.5, col="blue")
+	} else {
+	  plot(1, 1, type="n", xlim=range(p300), ylim=range(p180), xaxs="i", yaxs="i", xlab=NA, ylab="p(180°)", axes=FALSE, mgp=c(1.8, 0.6, 0))
+	  raster_info <- raster_on(300)
+	  .filled.contour(p300, p180, haasnoot_m23_rmse_list[[aa]]$rmse, zlevels, zcol)
+	  raster_off(raster_info)
+	  contour(p300, p180, haasnoot_m23_rmse_list[[aa]]$rmse, levels=zlevels, add=TRUE, lwd=0.5)
+	  contour(p300, p180, haasnoot_m23_rmse_list[[aa]]$split, levels=c(-30,0,30), add=TRUE, lwd=0.5, drawlabels=FALSE, lty="dashed")
+	  axis(2, seq(0,1,by=1/3), label=FALSE)
+	  axis(2, seq(1/6,5/6,by=1/3), label=FALSE, tcl=-0.2)
+	  axis(2, seq(0,1,by=1/3), c("0", "1/3", "2/3", "1"), tick=FALSE, gap.axis=0.2)
+	  points(t(chi1_pop)[aa,c(3,2),drop=FALSE], pch=16, col="blue")
+	}
+	legend("topright", legend=paste0(aa_label, " "), bty="n", text.font=2)
+	#legend("bottomleft", legend=par("pin"), bty="n")
+	axis(1, seq(0,1,by=1/3), label=FALSE)
+	axis(1, seq(1/6,5/6,by=1/3), label=FALSE, tcl=-0.2)
+	if (aa %in% tail(aa_order, 2)) {
+		axis(1, seq(0,1,by=1/3), c("0", "1/3", "2/3", "1"), tick=FALSE, gap.axis=0.2)
+		title(xlab="p(300°)", xpd=NA)
+	}
+	box()
+}
+```
+
+```{r, fig.dim=c(17.8,18.5)/2.54, dev.args = list(pointsize = 8), echo = FALSE, label = "fig5:aarmseperez", fig.cap = "\\label{fig:aarmseperez}Self-consistent equation \\ref{eq:karplusperez} \\chem{\\phantom{}^3J}(HA-HB) root mean squared error (RMSE) in \\unit{Hz} for $\\mathrm{M}_1$ (left) and $\\mathrm{M}_3$ (right) models of motion. Dashed lines separate regions with swapped assignments. Dunbrack rotamer library distributions are shown on top of the $\\mathrm{M}_1$ plots, with the $\\mathrm{M}_1$ model having the closest match to each shown with a blue plus sign. Rotamer library populations are shown as a blue point or solid vertical line in the $\\mathrm{M}_3$ plots."}
+zlim <- c(0,8)
+zlevels <- seq(0,8.5,by=0.5)
+zcol <- rev(heat.colors(length(zlevels)-1))
+
+mardist <- c(0,2.9,0.1,0.1)
+mar1 <- c(0.7,2.9,0,0.1)
+mar2 <- c(0.7,2.9,0,0.3)
+par(oma=c(2.1,0,0,0), mar=mar1)
+layout(matrix(matrix(seq_len(2*18), nrow=2), ncol=4, byrow=TRUE), widths=rep(c(2.2,1), 2), heights=rep(1,9))
+layout_mat <- matrix(seq_len(4*18), nrow=8)[c(1:2,5:6,3:4,7:8),]
+layout_mat <- matrix(layout_mat, ncol=4, byrow=TRUE)
+layout_mat[!is.na(layout_mat)] <- rank(layout_mat[!is.na(layout_mat)])
+layout(layout_mat, widths=rep(c(2.5,1), 2), heights=rep(c(0.2,1),9))
+
+aa_order <- unique(chi_h_couplings[,"aa"])
+
+#m23_rmse_list <- m2_rmse_list
+m23_rmse_list <- m3_rmse_list
+
+for (aa in aa_order) {
+
+  aa_label <- aa
+	substr(aa_label, 1, 1) <- toupper(substr(aa_label, 1, 1))
+  
+	par(mar = mardist, cex=1)
+	plot(1, 1, type="n", xlim=range(chi1)*180/pi, ylim=c(0,1.04), xaxs="i", yaxs="i", axes=FALSE, xlab=NA, ylab=NA)
+	for (i in 1:3) {
+	  y <- chi1_dist[,i,aa]/max(chi1_dist[,i,aa])
+	  y <- y*chi1_pop[i,aa]/max(chi1_pop[,aa])
+	  points(seq(0, 360, length.out=length(y)), y, type="l", col="blue")
+	}
+	
+	plot.new()
+	
+  par(mar = mar1, mgp = c(1.6, 0.6, 0), cex=1)
+	plot(1, 1, type="n", xlim=range(chi1)*180/pi, ylim=range(chi1_sigma)*180/pi, xaxs="i", yaxs="i", xaxt="n", xlab=NA, ylab=expression(sigma[chi[1]] ~ "(°)"), main=NA)
+	axis(1, seq(0,360,by=120),label=FALSE, tcl=-0.35)
+	axis(1, seq(60,300,by=120),label=FALSE, tcl=-0.5)
+	axis(1, seq(30,330,by=60),label=FALSE, tcl=-0.2)
+	if (aa %in% tail(aa_order, 2)) {
+		axis(1, seq(0,360,by=60),tick=FALSE)
+		title(xlab=expression(chi[1] ~ "(°)"), xpd=NA)
+	}
+	raster_info <- raster_on(300)
+	.filled.contour(chi1*180/pi, chi1_sigma*180/pi, m1_rmse_list[[aa]]$rmse, zlevels, zcol)
+	raster_off(raster_info)
+	points(t(dist_match[,,aa]), cex=0.75, pch=3, col="blue")
+	contour(chi1*180/pi, chi1_sigma*180/pi, m1_rmse_list[[aa]]$rmse, levels=zlevels, add=TRUE, lwd=0.5)
+	contour(chi1*180/pi, chi1_sigma*180/pi, m1_rmse_list[[aa]]$split, levels=c(-30,0,30), add=TRUE, lwd=0.5, drawlabels=FALSE, lty="dashed")
+	box()
+	
+	par(mar = mar2, mgp = c(1.6, 0.6, 0), cex=1)
+	if (any(is.nan(m23_rmse_list[[aa]]$rmse))) {
+	  plot(1, 1, type="n", xlim=range(p300), ylim=range(0, m23_rmse_list[[aa]]$rmse[,1]), xaxs="i", yaxs="i", xlab=NA, ylab=expression(phantom()^3*J ~ RMSE ~ "(Hz)"), xaxt="n", mgp=c(1.6, 0.6, 0), xpd=NA)
+	  abline(v=p300[which.min(abs(m3_rmse_list[["pro"]]$split[,1]))], lty="dashed", lwd=0.5)
+	  legend("topright", legend=paste0(aa_label, " "), box.col=NA, text.font=2, bg="white", x.intersp=0)
+	  points(p300, m23_rmse_list[[aa]]$rmse[,1], type="l")
+	  abline(v=t(chi1_pop)[aa,3], lwd=1.5, col="blue")
+	} else {
+	  plot(1, 1, type="n", xlim=range(p300), ylim=range(p180), xaxs="i", yaxs="i", xlab=NA, ylab="p(180°)", axes=FALSE, mgp=c(1.8, 0.6, 0))
+	  raster_info <- raster_on(300)
+	  .filled.contour(p300, p180, m23_rmse_list[[aa]]$rmse, zlevels, zcol)
+	  raster_off(raster_info)
+	  contour(p300, p180, m23_rmse_list[[aa]]$rmse, levels=zlevels, add=TRUE, lwd=0.5)
+	  contour(p300, p180, m23_rmse_list[[aa]]$split, levels=c(-30,0,30), add=TRUE, lwd=0.5, drawlabels=FALSE, lty="dashed")
+	  axis(2, seq(0,1,by=1/3), label=FALSE)
+	  axis(2, seq(1/6,5/6,by=1/3), label=FALSE, tcl=-0.2)
+	  axis(2, seq(0,1,by=1/3), c("0", "1/3", "2/3", "1"), tick=FALSE, gap.axis=0.2)
+	  points(t(chi1_pop)[aa,c(3,2),drop=FALSE], pch=16, col="blue")
+	}
+	legend("topright", legend=paste0(aa_label, " "), bty="n", text.font=2)
+	#legend("bottomleft", legend=par("pin"), bty="n")
+	axis(1, seq(0,1,by=1/3), label=FALSE)
+	axis(1, seq(1/6,5/6,by=1/3), label=FALSE, tcl=-0.2)
+	if (aa %in% tail(aa_order, 2)) {
+		axis(1, seq(0,1,by=1/3), c("0", "1/3", "2/3", "1"), tick=FALSE, gap.axis=0.2)
+		title(xlab="p(300°)", xpd=NA)
+	}
+	box()
+}
+```
+
+To more quantitatively model distributions of the chi 1 angle, for which the most reliable Karplus parameters were available, we used several different models of motion. The first, $\mathrm{M}_1$, models chi angle fluctuations as being normally distributed with standard deviations ranging from 0-50°. During development of the self-consistent Karplus parameters, both the Karplus parameters and the $\mathrm{M}_1$ model parameters ($\chi 1$ and $\sigma_{\chi 1}$) describing each experimentally measured residue were jointly optimized to be self-consistent with one another. [@Perez:2001aa]
+
+For the full range of $\chi 1$ and $\sigma_{\chi 1}$ values, we calculated the root mean squared error (RMSE) between the back-calculated and experimentally measured scalar couplings. Those are shown as rectangular contour plots in Figure \ref{fig:aarmsehaasnoot} (generalized equation \ref{eq:karplushaasnoot}) and Figure \ref{fig:aarmseperez} (self-consistent equation \ref{eq:karplusperez}). For evaluation of the different models, we made no assumption about the stereospecific assignments of the HB2 and HB3 atoms. The RMSE values were calculated for both possible assignments and the minimum RMSE for a given set of model parameters is shown. Boundaries between regions with different assignments are drawn as dashed lines. For the beta-branched amino acids (valine, isoleucine, and threonine), there is no such ambiguity but the single scalar coupling provides less information.
+
+The chi 1 distributions used by the Dunbrack rotamer library are shown in blue on top of each contour plot. For reference, we determined the $\mathrm{M}_1$ model parameters that produced the closest distribution (in terms of the Bhattacharyya distance) to each rotameric bin distribution. Those parameters are shown with blue plus signs. For amino acids excluding proline, the mean angles matching the rotamer library distributions (ranging `r paste(apply(apply(dist_match[1,,setdiff(dimnames(dist_match)[[3]], "pro")], 1, range), 2, paste, collapse="-"), collapse="°, ")`°) were close to the canonical values. Due to the need for ring closure, the proline chi 1 angle distributions are skewed towards 0° or 360° and report primarily on ring pucker. The standard deviations of the rotamer library distributions ranged `r paste(range(dist_match[2,,], na.rm=TRUE), collapse="-")`°, with aromatic side chains having the most variation ($\sigma_{\chi 1} \ge `r min(dist_match[2,,c("his","tyr","phe","trp")])`°$). 
+
+While $\sigma_{\chi 1}$ was varied 0-50° both here and in the self-consistent Karplus parameterization, $\sigma_{\chi 1}$ values much greater than those observed in the PDB are not physically realistic. Furthermore, mean angles too far from those observed in the PDB are also not likely. The applicability of the unimodal $\mathrm{M}_1$ model to the experimental data can be judged based on how nearby a region with low RMSE is to the blue plus sign. For nearly all of the amino acids, the measured $\phantom{}^3J$(HA-HB) couplings are sufficient to exclude the $\mathrm{M}_1$ model, suggesting that they instead populate multiple rotamer bins as would be expected for an free amino acid in solution. Proline does show a set of $\mathrm{M}_1$ parameters with low self-consistent RMSE values very close to a rotamer library distribution. Isoleucine is the only other amino acid where the single-rotamer model could be considered reasonable (with a plus symbol RMSE < 1 Hz), likely due to the reduced information content of the single scalar coupling.
+
+An alternate $\mathrm{M}_2$ model was previously tested that back-calculated the scalar couplings using a population-weighted mean of the theoretical scalar couplings at 60°, 180°, and 300°, which also makes it a two-parameter model. [@Perez:2001aa] However, as the Dunbrack rotamer library indicates, side chains generally sample a range of values within a rotamer well. In addition, there is an amino acid-specific bias away from the canonical angles, which can be subtle for many amino acids but quite large for proline. To account for this prior information, we propose another two-parameter model, referred to here as $\mathrm{M}_3$, that uses average scalar couplings calculated directly from the rotameric bins in the Dunbrack 2010 rotamer library dataset.
+
+The RMSE values for the $\mathrm{M}_3$ model are shown as square contour plots in Figures \ref{fig:aarmsehaasnoot} and \ref{fig:aarmseperez}, with the populations from the rotamer library shown as a blue point. Because only two valid rotamers exist for proline, the RMSE is plotted as a line vs. the population of the 300° (gauche minus) rotamer bin, with the rotamer library population shown as a vertical blue line.
+
+For the $\mathrm{M}_1$ model, which allows chi angles with unrealistically high potential energies, it is possible to judge model applicability by comparing with rotamer library distributions (i.e. blue plus signs). However, because the $\mathrm{M}_3$ model stays within observable chi angles by definition, there is not necessarily a means to assess model validity with \textit{a priori} information. However, the vast majority of free amino acids do have scalar couplings reasonably consistent (RMSE < 1.5 Hz) with the rotamer library populations, which is not necessarily expected given the presence of the \chem{NH_3^+} and \chem{COO^-} groups, lack of neighboring amino acids, and high solvent exposure.
+
+```{r, fig.dim = c(9,3)/2.54, dev.args = list(pointsize = 8), echo = FALSE, label = "fig6:betarotamers", fig.cap = "\\label{fig:betarotamers} Beta-branched amino acids, with hydrogen colors matching those used in Figures \\ref{fig:ilefit} and \\ref{fig:aafit}. \\chem{\\phantom{}^3J}(HA-HB) is most sensitive to the population of the shown rotamers because HA (green) is trans to HB (blue), giving the maximum theoretical scalar coupling. **A)** Valine $\\chi 1 = 180°$ rotamer. **B)** Isoleucine $\\chi 1 = 300°$ rotamer. **C)** Threonine $\\chi 1 = 300°$ rotamer. The hydroxyl hydrogen (white) was also deuterated in the sample."}
+val180 <- png::readPNG("aa_images/val180.png")
+ile300 <- png::readPNG("aa_images/ile300.png")
+thr300 <- png::readPNG("aa_images/thr300.png")
+par(mar=c(0,0,0,0), mfrow=c(1,3))
+plot(1, 1, type="n", xlim=c(0,nrow(val180)), ylim=c(0,ncol(val180)), xaxs="i", yaxs="i", xlab=NA, ylab=NA, axes=FALSE, asp=1)
+rasterImage(val180, 0, 0, nrow(val180), ncol(val180))
+figure_letter("A")
+plot(1, 1, type="n", xlim=c(0,nrow(ile300)), ylim=c(0,ncol(ile300)), xaxs="i", yaxs="i", xlab=NA, ylab=NA, axes=FALSE, asp=1)
+rasterImage(ile300, 0, 0, nrow(ile300), ncol(ile300))
+figure_letter("B")
+plot(1, 1, type="n", xlim=c(0,nrow(thr300)), ylim=c(0,ncol(thr300)), xaxs="i", yaxs="i", xlab=NA, ylab=NA, axes=FALSE, asp=1)
+rasterImage(thr300, 0, 0, nrow(thr300), ncol(thr300))
+figure_letter("C")
+```
+
+By contrast, beta-branched valine and isoleucine have $\phantom{}^3J$(HA-HB) values (`r formatC(tables_list[["val"]][["couplings"]]["HA-HB",], 1, format = "f")` and `r formatC(tables_list[["ile"]][["couplings"]]["HA-HB",], 1, format = "f")` \unit{Hz}, respectively) quite inconsistent with the rotamer populations observed in the PDB. The $\chi 1 = 180°$ rotamer of valine and $\chi 1 = 300°$ rotamer of isoleucine, both highly populated in the PDB, have very similar three-dimensional structures due to differences in the way chi 1 atoms are defined. (Figure \ref{fig:betarotamers}A/B) These rotamers are likely very prevalent in folded proteins because they avoid more strained conformations where either gamma carbon has two gauche interactions with the backbone. Interestingly, the threonine $\chi 1 = 300°$ rotamer that has a similar heavy atom arrangement (Figure \ref{fig:betarotamers}C) appears to have a 20-45% population in solution according to the $\mathrm{M}_3$ model. (Figures \ref{fig:aarmsehaasnoot} and \ref{fig:aarmseperez}) The differences in preferences for these rotamers in the free amino acids could arise due to the more hydrophobic side chains of valine and isoleucine imposing a greater desolvation penalty on the \chem{NH_3^+} group than threonine does. The greater similarity of the GGXA tetrapeptide couplings to those from the rotamer library supports this mechanism. (Figure \ref{fig:chicouplings})
+
+Proline is another amino acid whose PDB populations show varying levels of consistency with those observed for the free amino acid. Crystal structures show nearly equal populations of the \chem{C_\gamma} exo ($\chi 1 \approx 30°$) and \chem{C_\gamma} endo ($\chi 1 \approx 330°$). Interpretation of the solution NMR for free proline depends on the parameters used, with generalized equation \ref{eq:karplushaasnoot} showing a 2:1 exo:endo ratio in rough agreement with the 1:1 ratio calculated by @Haasnoot:1981b, while self-consistent equation \ref{eq:karplusperez} shows a strong preference for the exo conformation. Aspartate also shows a stronger preference for either the $\chi 1 = 180°$ or $\chi 1 = 300°$ rotamers when free in solution than it does in folded crystal structures.
+
+Finally, several amino acids show near uniform populations of their three different chi 1 rotamers in solution, including lysine, arginine, and glutamine. All three side chains have longer aliphatic substructures, \chem{(CH_2)_{2-4}}, and positively charged or polar head groups, which may contribute to the relatively equal rotameric free energies.
+
+\conclusions[Conclusions]
+
+Our results indicate that for most nuclei, the weak-coupling assumption yields useful information about side chain dihedral angles. Only a small subset of nuclei show roofing effects from strong coupling and for nearly all that do, it results from a geminal $\phantom{}^2J$ coupling that does not contain readily quantifiable structural information. For the aliphatic regions of longer side chains where nuclei have both $\phantom{}^2J$ and $\phantom{}^3J$ couplings, strong coupling has a larger impact on multiplet analysis. To fully capture the complexity of multiplet patterns observed for such amino acid side chains, a strong coupling model is required. Even in multidimensional spectra that have insufficient resolution to accurately quantify scalar couplings through computational analysis, having an accurate model of the asymmetry is likely important for quantifying the volumes of severely overlapped peaks, for instance in a 2D or 3D NOESY. As such, incorporation of a quantum mechanical spin system model into FitNMR is currently in progress.
+
+Both the generalized [@Haasnoot:1980aa] and self-consistent [@Perez:2001aa] Karplus equation parameterizations appear to produce reasonable agreement between experiment and theory when extrapolated to chi 2-4, which were not part of the original training data. By mapping out the full parameter space of motion models assuming the absence ($\mathrm{M}_1$) or presence ($\mathrm{M}_3$) of multiple rotamers, much can be learned about side chain motion or lack thereof. As we illustrate here, differentiating between the models requires a minimum of two scalar couplings per bond. While helpful for maximum information content, stereospecific assignments do not appear strictly necessary to demonstrate the presence of multiple rotamers. While there are multiple purely heavy atom scalar couplings associated with the chi 1 angle, the same is not true for most chi 2-4 angles. This illustrates the power of proton spectral analysis and provides motivation for further development in this area.
+
+As shown here, peak overlap is already an issue for interpreting coupling constants from 1D spectra of individual amino acids. Overlap becomes prohibitive in 1D spectra of folded proteins but can likely be overcome to a large extent through the use of multidimensional \chem{\phantom{}^1H-\phantom{}^1H} 2D spectra like the NOESY, which contain at least one isolated cross-peak for many nuclei. Without the presence of isotopically labeled heteronuclei requiring decoupling, the receiver can be left open during direct-dimension acquisition, allowing access to the complete free induction decay (FID). For small, single-digit \unit{kDa} proteins, the multiplet patterns may be accessible to software like FitNMR in a similar manner to the $\phantom{}^3J$(H-HA) doublet. [@Dudley:2020] A relatively new class of proteins that size are computationally designed miniprotein binders, which are able to target therapeutically relevant proteins [@Cao:2022aa] and also are quite accessible to NMR characterization [@Dudley:2024]. Larger proteins may benefit from a strategy analogous to previously employed techniques [@Oschkinat:1984aa;@Kessler:1985aa;@Titman:1990aa;@Huber:1993aa;@Prasch:1998aa] of analyzing in-phase data together with anti-phase data from experiments like the DQF-COSY, where the observed signal intensity is proportional to the degree of anti-phase splitting by the coupling active in the cross-peak [@Delaglio:2001aa]. Such spectra have historically been applied to the assignment and analysis of smaller unlabeled polypeptides [@Wuthrich:1986aa;@Inagaki:2013aa] but not fully exploited for their structural information content. This study lays the groundwork for comprehensive modeling and structural interpretation of multiplets in multidimensional protein spectra.
