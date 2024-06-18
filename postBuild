@@ -1,6 +1,7 @@
 #!/bin/bash
 
 tar -xzf data/fit1d_gissmo.tar.gz
+scripts/fit1d_gissmo_unzip.sh
 tar -xzf data/fit1d_nmrpipe_com.tar.gz
 tar -xzf data/fit1d_nmrpipe_output.tar.gz
 tar --warning=no-unknown-keyword -xzf data/fit1d_fitnmr_start.tar.gz
