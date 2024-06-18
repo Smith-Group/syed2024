@@ -8,3 +8,8 @@ tar --warning=no-unknown-keyword -xzf data/fit1d_fitnmr_start.tar.gz
 tar --warning=no-unknown-keyword -xzf data/fit1d_fitnmr_output.tar.gz
 tar -xzf data/aa_model.tar.gz
 tar --warning=no-unknown-keyword -xzf data/aa_images.tar.gz
+
+mkdir -p /etc/rstudio/keybindings
+touch /etc/rstudio/keybindings/addins.json
+touch /etc/rstudio/keybindings/editor_bindings.json
+touch /etc/rstudio/keybindings/rstudio_bindings.json
