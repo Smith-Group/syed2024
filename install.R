@@ -1,3 +1,7 @@
+install.packages("markdown")
 install.packages("knitr")
 install.packages("rticles")
 install.packages("png")
+install.packages("minpack.lm")
+install.packages("abind")
+install.packages("https://smith-group.github.io/fitnmr_releases/fitnmr_0.7.tar.gz")
