@@ -1,4 +1,4 @@
-The following archive contains the data and scripts for reproducing the Syed et al 2024 manuscript.
+The following archive contains the data and scripts for reproducing the [Syed et al. 2024 manuscript](https://doi.org/10.5194/mr-2024-7).
 
 
 # Requirements
@@ -55,9 +55,11 @@ Do the following steps to create the manuscript PDF:
 
 [![Binder](http://mybinder.org/badge_logo.svg)](http://mybinder.org/v2/gh/smith-group/syed2024/main?urlpath=rstudio)
 
-The button above will use the [Binder service](https://mybinder.org) to launch an online RStudio instance in your browser with all the files from this repository. During setup of the instance, all file extraction scripts above are run for you. To create the manuscript PDF from the R Markdown file, just click the `Syed2024.Rmd` file in the lower-right panel and then click the **Knit** button in the upper-left panel. The PDF will open after the process is complete or you can click the created `Syed2024.pdf` file in the lower-right panel.
+The button above will use the free [Binder hosting service](https://mybinder.org) to launch an online RStudio instance in your browser with all the files from this repository. During setup of the instance, all file extraction scripts above are run for you. To create the manuscript PDF from the R Markdown file, just click the `Syed2024.Rmd` file in the lower-right panel and then click the **Knit** button in the upper-left panel. The PDF will open after the process is complete or you can click the created `Syed2024.pdf` file in the lower-right panel.
 
 If you want to interact with the R code in the R Markdown file, you will need to first manually execute code chunks in the appendix, which are found indented in green text towards the top of the file. For each code chunk, select the lines between (but not including) the `` ```{r ...} `` and `` ``` `` lines then click the **Run** button. Code chunks in the main text can be run by clicking the green rightward facing triangle button at the top-right corner of each chunk.
+
+To rerun FitNMR fitting of the amino acid 1D spectra, select the Terminal tab in the lower-left panel and run the `scripts/fit1d_fitnmr_run.sh` script. The input `start_*` CSV and output CSV/PDF files can be examined by browsing the `fit1d` directory in the lower-right panel. 
 
 
 # NMRBox
