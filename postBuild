@@ -3,7 +3,7 @@
 tar -xzf data/fit1d_gissmo.tar.gz
 tar -xzf data/fit1d_nmrpipe_com.tar.gz
 tar -xzf data/fit1d_nmrpipe_output.tar.gz
-tar -xzf data/fit1d_fitnmr_start.tar.gz
-tar -xzf data/fit1d_fitnmr_output.tar.gz
+tar --warning=no-unknown-keyword -xzf data/fit1d_fitnmr_start.tar.gz
+tar --warning=no-unknown-keyword -xzf data/fit1d_fitnmr_output.tar.gz
 tar -xzf data/aa_model.tar.gz
-tar -xzf data/aa_images.tar.gz
+tar --warning=no-unknown-keyword -xzf data/aa_images.tar.gz
